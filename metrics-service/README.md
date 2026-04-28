@@ -86,7 +86,7 @@ metrics-service/
 # Install dependencies
 uv sync
 
-# Create .env file (copy from .env.example if provided)
+# Create .env file
 echo "JWT_SECRET=dev-secret-change-in-production" > .env
 echo "ENVIRONMENT=development" >> .env
 ```
@@ -94,7 +94,6 @@ echo "ENVIRONMENT=development" >> .env
 ### Run
 
 ```bash
-# Start dev server with auto-reload
 uv run uvicorn app.main:app --reload --port 8000
 ```
 
