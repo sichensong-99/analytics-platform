@@ -1,0 +1,167 @@
+# ====================================================
+# Metric Definitions (Phase 2A: with mock SQL)
+# ====================================================
+# Each metric includes:
+# - version: semantic version (v1.0, v1.1, ...)
+# - status: active / deprecated / experimental
+# - owner: who owns this metric definition
+# - source_tables: upstream tables (used for lineage)
+# - changelog: history of definition changes
+# ====================================================
+
+metrics:
+
+  # ===========================================
+  # Revenue Metrics
+  # ===========================================
+  revenue_by_day:
+    version: v1.0
+    status: active
+    owner: data-team
+    created_at: "2026-04-28"
+    updated_at: "2026-04-28"
+
+    name: "Daily Revenue"
+    description: "Total revenue from completed orders, by day."
+    business_definition: |
+      Counted only when financial_status = 'paid'.
+      Refunded and pending orders are excluded.
+      Currency: USD. Timezone: UTC.
+    unit: USD
+
+    source_tables:
+      - dws.daily_revenue
+    upstream_metrics: []
+
+    sql: |
+      SELECT
+        order_date AS date,
+        SUM(revenue) AS value
+      FROM dws.daily_revenue
+      WHERE order_date BETWEEN :start_date AND :end_date
+      GROUP BY order_date
+      ORDER BY order_date
+
+    params:
+      - start_date
+      - end_date
+
+    changelog:
+      - version: v1.0
+        date: "2026-04-28"
+        change: "Initial version"
+        breaking: false
+
+  # ===========================================
+  aov_by_day:
+    version: v1.0
+    status: active
+    owner: data-team
+    created_at: "2026-04-28"
+    updated_at: "2026-04-28"
+
+    name: "Average Order Value"
+    description: "Average revenue per completed order, by day."
+    business_definition: |
+      AOV = total revenue / order count, only paid orders.
+    unit: USD
+
+    source_tables:
+      - dws.daily_revenue
+    upstream_metrics: []
+
+    sql: |
+      SELECT
+        order_date AS date,
+        SUM(revenue) / NULLIF(SUM(order_count), 0) AS value
+      FROM dws.daily_revenue
+      WHERE order_date BETWEEN :start_date AND :end_date
+      GROUP BY order_date
+      ORDER BY order_date
+
+    params:
+      - start_date
+      - end_date
+
+    changelog:
+      - version: v1.0
+        date: "2026-04-28"
+        change: "Initial version"
+        breaking: false
+
+  # ===========================================
+  # Marketing Metrics
+  # ===========================================
+  roas_by_channel:
+    version: v1.0
+    status: active
+    owner: marketing-team
+    created_at: "2026-04-28"
+    updated_at: "2026-04-28"
+
+    name: "ROAS by Channel"
+    description: "Return on ad spend, broken down by acquisition channel."
+    business_definition: |
+      ROAS = attributed_revenue / ad_spend.
+      Uses last-click attribution model from Triple Whale.
+    unit: ratio
+
+    source_tables:
+      - dws.channel_performance
+    upstream_metrics: []
+
+    sql: |
+      SELECT
+        channel,
+        SUM(attributed_revenue) / NULLIF(SUM(ad_spend), 0) AS value
+      FROM dws.channel_performance
+      WHERE event_date BETWEEN :start_date AND :end_date
+      GROUP BY channel
+
+    params:
+      - start_date
+      - end_date
+
+    changelog:
+      - version: v1.0
+        date: "2026-04-28"
+        change: "Initial version"
+        breaking: false
+
+  # ===========================================
+  ad_spend_by_day:
+    version: v1.0
+    status: active
+    owner: marketing-team
+    created_at: "2026-04-28"
+    updated_at: "2026-04-28"
+
+    name: "Ad Spend by Day"
+    description: "Total ad spend by day, across all channels."
+    business_definition: |
+      Sum of ad_spend from all attribution events.
+    unit: USD
+
+    source_tables:
+      - dws.channel_performance
+    upstream_metrics: []
+
+    sql: |
+      SELECT
+        event_date AS date,
+        channel,
+        SUM(ad_spend) AS value
+      FROM dws.channel_performance
+      WHERE event_date BETWEEN :start_date AND :end_date
+      GROUP BY event_date, channel
+      ORDER BY event_date
+
+    params:
+      - start_date
+      - end_date
+
+    changelog:
+      - version: v1.0
+        date: "2026-04-28"
+        change: "Initial version"
+        breaking: false
