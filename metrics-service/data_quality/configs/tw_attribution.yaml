@@ -1,0 +1,28 @@
+# Triple Whale Attribution Orders 数据质量配置
+
+description: "Data quality checks for TW attribution_order table"
+owner: "data-platform-team"
+version: "1.0"
+
+checks:
+  - type: not_null
+    table: tw_attribution_order
+    column: _triple_whale_order_id
+  
+  - type: not_null
+    table: tw_attribution_order
+    column: total_price
+  
+  - type: unique
+    table: tw_attribution_order
+    column: _triple_whale_order_id
+  
+  - type: range
+    table: tw_attribution_order
+    column: total_price
+    min: 0
+  
+  - type: freshness
+    table: tw_attribution_order
+    column: _synced_at
+    max_age_hours: 48
