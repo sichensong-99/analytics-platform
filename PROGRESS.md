@@ -42,6 +42,14 @@
 - ✅ 数据接入工具确认:Shopify 走 Fivetran(managed ELT),TW 走 custom pipeline
 - ⚠️ 发现并验证 2 个上游数据问题(详见下方"当前卡点")
 
+### Track 3:DQ 框架代码骨架(2026-05-13 完成)
+- ✅ 基于抽象基类的可扩展架构(BaseChecker)
+- ✅ 4 种 checker:not_null / unique / range / freshness
+- ✅ YAML 配置驱动(2 个示例:shopify_orders, tw_attribution)
+- ✅ Runner + Reporter(console + JSON 双格式输出)
+- ✅ 15 个测试场景全部通过(单元测试 + 端到端测试)
+- ✅ 完整 README + commit history
+- 位置:`metrics-service/data_quality/`
 ---
 
 ## ⏳ 当前阶段:等数据期间(Track 1/2/3 并行)
@@ -51,8 +59,8 @@
 **正在做的事**:
 - [x] Track 1:数据资产探索(完成探索,待写文档)
 - [ ] Track 1:写 `docs/existing_data_inventory.md` 文档化
-- [ ] Track 3:DQ 框架代码骨架(优先做,0 返工风险)
-- [ ] Track 2:星型模型设计(框架级,等数据修好后细化字段)
+- [x] ~~Track 3:DQ 框架代码骨架~~ ✅ 完成
+- [ ] Track 2:星型模型框架级设计(下一个)
 
 ---
 
@@ -138,3 +146,15 @@
 输出标准化数据质量报告与上下游协作沟通,避免下游数仓建模基于错误源系统启动。
 
 **关键词**:Data Source Validation / Multi-source Reconciliation / Data Onboarding QA / Cross-team Stakeholder Communication
+
+**Data Quality Framework(2026-05-13 新增)**
+
+设计并实现 YAML 配置驱动的数据质量校验框架,作为多源数据 pipeline 的质量门控(quality gate):
+
+- **架构**:基于抽象基类(BaseChecker)+ Checker 注册表的可扩展设计,新增 check 类型 0 改动 runner
+- **能力**:支持 4 类校验(not_null / unique / range / freshness),涵盖完整性、唯一性、值域、新鲜度
+- **配置驱动**:业务方修改 YAML 即可新增校验,无需 Python 改动;运维与业务规则解耦
+- **报告**:支持 console(人读)和 JSON(机器读)双格式输出,便于 pipeline 集成与告警
+- **可测试**:15 个测试场景覆盖单元与端到端流程,Mock-first 设计便于本地快速迭代
+
+**关键词**:Data Quality / Configuration-Driven Architecture / YAML DSL / Pipeline Quality Gate / Extensible Framework Design
