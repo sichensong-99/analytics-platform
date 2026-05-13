@@ -1,0 +1,38 @@
+# Shopify Orders 数据质量配置
+# 业务方修改这个 YAML 就能新增/调整检查,不需要改 Python 代码
+
+description: "Data quality checks for Shopify orders table"
+owner: "data-platform-team"
+version: "1.0"
+
+checks:
+  # ===== 完整性 =====
+  - type: not_null
+    table: shopify_orders
+    column: order_id
+    
+  - type: not_null
+    table: shopify_orders
+    column: created_at
+  
+  - type: not_null
+    table: shopify_orders
+    column: total_price
+  
+  # ===== 唯一性 =====
+  - type: unique
+    table: shopify_orders
+    column: order_id
+  
+  # ===== 值域 =====
+  - type: range
+    table: shopify_orders
+    column: total_price
+    min: 0
+    max: 100000
+  
+  # ===== 新鲜度 =====
+  - type: freshness
+    table: shopify_orders
+    column: _fivetran_synced
+    max_age_hours: 48
