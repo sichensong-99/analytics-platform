@@ -1,6 +1,6 @@
 # Project Progress
 
-> Last updated: 2026-05-13
+> Last updated: 2026-05-14
 > 每次 chat 结束前,Claude 帮助更新这份文档,然后重新上传到 Project Knowledge
 
 ---
@@ -26,14 +26,13 @@
 
 ### Track 1 — 数据资产探索(2026-05-05 完成)
 - 摸清 Databricks 上 13 张表的结构和粒度
-  - Shopify @ `mvdevdatabricks.shopify_32degrees`:8 张表
-  - TW @ `mvdev_federated_catalog.triple_whale`:5 张表
 - 数据接入工具确认:Shopify 走 Fivetran,TW 走 custom pipeline
 
-### 数据接入校验与协调(2026-05-05 至 2026-05-13)
-- 发现并修复:**Fivetran Shopify connector 错连 Appaman**,推动切换到 32Degrees,已修复
-- 发现并修复:**TW attribution_order 缺历史数据**,推动 Cal backfill 到 2025-07-01,已修复(但 11-2 月仍有缺口)
-- 跨源 join 匹配率 44% 已确认为业务合理基线(其余为 direct/unattributed 流量)
+### 数据接入校验与协调(2026-05-05 至 2026-05-14)
+- ✅ Fivetran Shopify connector 错连 Appaman → 已修复至 32Degrees(8 日累计差异 0.5%)
+- 🟡 TW `attribution_order` 1-2 月数据缺口 → 已发邮件给 Cal,等回复(其他月份 92-99% match rate)
+- ✅ 跨源 join 健康基线确认为 ≥ 90%(之前误判的 44% 是数据未完整时的伪基线)
+- ✅ Source reconciliation 验证:Databricks Shopify vs Panoply 8 日累计差异 0.5%
 
 ### Track 3:DQ 框架代码骨架(2026-05-13 完成)⭐
 - 基于抽象基类的可扩展架构(BaseChecker)
@@ -41,63 +40,85 @@
 - YAML 配置驱动(2 个示例:shopify_orders, tw_attribution)
 - Runner + Reporter(console + JSON 双格式输出)
 - 15 个测试场景全部通过
-- 完整 README + Conventional Commit 风格 commit history
 - 位置:`metrics-service/data_quality/`
 - 已推送到 GitHub
 
+### Track 1 文档 — `existing_data_inventory.md`(2026-05-14 完成 Step 1-3)
+- ✅ Section 1: Executive Summary
+- ✅ Section 2: Shopify 8 张表详解
+- ✅ Section 3: TW 5 张表详解
+- ✅ Section 4: 其他 Schema 边界声明(扫了 8 个相关 schema,明确不纳入)
+- 🚧 Section 5: PBI Dashboard 映射(待做 Step 4)
+- ✅ Section 6: Open Issues(4 个 issues,每个含根因 + 影响 + 解决方案)
+- ✅ Section 7: Appendix(5 个可复用 SQL)
+- 位置:`docs/existing_data_inventory.md`
+
 ---
 
-## ⏳ 当前阻塞(2026-05-13)
+## ⏳ 当前阻塞(2026-05-14)
 
-### 卡点:TW `attribution_order` 11月-2月 数据缺口
+### 卡点:TW `attribution_order` 2026-01 和 02 月数据缺口
 
-**现象**:2025-11 至 2026-02 这 4 个月订单量比相邻月份骤降 95%+,而这恰好是 32Degrees 旺季(寒冬 + 节日)。
+**现象**:
+- 2026-01:Shopify 329K 订单 vs TW 73K 匹配,match rate 22.17%
+- 2026-02:Shopify 172K 订单 vs TW 46K 匹配,match rate 26.73%
+- 其他月份(2025-07 至 2026-05)match rate 均 ≥ 92%
 
-**月度数据**:
-- 2025-10:181,906 ✅
-- 2025-11:35,984 🚩
-- 2025-12:1,500 🚩🚩🚩
-- 2026-01:20,090 🚩
-- 2026-02:45,946 🚩
-- 2026-03:167,683 ✅
+**状态**:邮件已发给 Cal(5/14),等回复(预计 1-2 个工作日)
 
-**状态**:邮件已发给 Cal,要求全量 rerun backfill(2025-07-01 至今)。等回复(预计 1-2 个工作日)。
-
-**业务影响**:不影响 Track 1/2 文档与设计;只影响 Phase 2B/3 真实建模(必须等数据完整才能动)。
+**业务影响**:不阻塞 Track 1 文档与 Track 2 框架级设计;只阻塞 Phase 2B/3 真实建模
 
 ---
 
 ## 🎯 下一步具体行动
 
-### 优先级 1:Track 1 文档收尾(半天 - 1 天)— 0 返工
-- 写 `docs/existing_data_inventory.md`
-- 13 张表的字段清单 + 粒度 + 用途
-- Open Issues 章节(写 TW 缺口,等 Cal 修完后打勾)
-- Source-to-Dashboard 映射章节(PBI 视觉对象 → 新数据源)
+### 立刻做(0 返工):Track 1 文档 Step 4 — PBI Dashboard 映射
 
-### 优先级 2:Track 2 框架级星型模型设计(2 天)— 0 返工
-- 反推 PBI dashboard 业务需求
-- 框架级 ER 图(几个 fact / 几个 dim,关联关系)
-- SCD 策略决定
-- 字段细节留 TODO,等 TW 缺口修复
+**做什么**:对照公司现有 PBI Dashboard,把每个图表/视觉对象映射到新数据源(Shopify / TW),记录在 `docs/existing_data_inventory.md` Section 5。
 
-### 等 TW 缺口修复后(预计本周内):
-- Track 2 字段级补充(1 天)
-- 启动 Phase 2B/3:数仓建模(3-4 周)
+**为什么必须做**:
+- 这是 Phase 2B/3 数仓建模的需求输入(知道要算哪些指标才能设计 fact/dim)
+- 是 leader 验收的依据(新 dashboard 至少要 cover 现有 dashboard 的所有功能)
+- 0 返工(数据源映射跟 1-2 月数据缺口无关)
+
+**操作方式**:
+- 在新 chat 里告诉 Claude "继续 Track 1 文档 Step 4"
+- 打开 PBI Dashboard,逐个视觉对象描述给 Claude
+- Claude 帮你写 Section 5 内容
+
+### 之后做(等 Cal 修完 TW 1-2 月数据):
+
+- Track 2:星型模型框架级设计(2-3 天)
+- Phase 2B/3:数仓建模(3-4 周)
 
 ---
 
 ## 📌 重要提醒(给 Claude 在新 chat 开始时)
 
-- 用户(Sia)是 non-tech 友好的,代码要给完整版,命令要解释清楚
-- 用户用 Windows + PowerShell + VS Code
-- 用户在 Project 文件夹路径:`C:\Users\sia.song\analytics-platform`
-- 用户 GitHub:https://github.com/sichensong-99
-- 已选定方案不要再翻盘,有疑问参考 PROJECT_CONTEXT.md 的 Decision Log
+### 项目基础信息
+- 用户:Sia(GitHub: sichensong-99)
+- 公司:32Degrees(保暖服装品牌,2025-07-01 启用 Triple Whale)
+- 项目路径:`C:\Users\sia.song\analytics-platform`
+- 环境:Windows 11 + PowerShell + VS Code
+- 风格:中英文混用,代码要完整版,命令要解释清楚,决策要明确推荐
+
+### 数据源现状
+- **Shopify** @ `mvdevdatabricks.shopify_32degrees`:✅ 完全 ready(2.4M 订单)
+- **TW** @ `mvdev_federated_catalog.triple_whale`:🟡 2026-01/02 还有缺口,其他月份 ≥ 92% match rate
+- **数据完整性判定标准**:跨源 monthly match rate ≥ 90%
+
+### 已锁定的关键决策(不要翻盘)
+- Shopify 走 Fivetran,TW 走 custom pipeline
+- TW 必须走 Databricks(不直连应用层)
+- 数据源边界 = Shopify + TW(其他 schema 不纳入)
+- 健康 match rate 基线 = ≥ 90%(不是 44%)
+- 数据接入工具理解:`mvdev_federated_catalog` 不是真的 federation,只是命名误导
+
+### 工作原则
 - **任何建议必须用 NORTH_STAR.md 的 5 大原则过滤一遍**
-- **当前等待 Cal 修 TW 11-2 月缺口**,不阻塞 Track 1/2,但阻塞 Phase 2B/3
-- Shopify 数据已完全 ready(244 万订单,从 2025-07-01 起)
-- TW 数据已 backfill 至 2025-07-01,但 11-2 月有缺口
+- 已选定方案不要再翻盘,有疑问参考 PROJECT_CONTEXT.md 的 Decision Log
+- 用户偏好"先想清楚再动手",所以先讲全局规划再讲细节
+- 用户严格反对返工,所以建议必须区分"0 返工"和"可能返工"
 
 ---
 
@@ -107,36 +128,33 @@
 |---|---|---|
 | 2026-04-28 | Phase 2A 完成,Project Brain 搭建完成 | 进入 Track 1 |
 | 2026-05-05 | Track 1 数据探索完成,发现 2 个上游数据问题并发邮件,业务主体确认为 32Degrees | 阻塞期推进 Track 3 |
-| 2026-05-13 | Shopify 数据修复完成;TW backfill 至 2025-07-01(11-2 月仍有缺口,已 ping Cal);**Track 3 DQ 框架完成并推送 GitHub** | 启动 Track 1 文档 / Track 2 框架级设计 |
+| 2026-05-13 | Shopify 数据修复完成;TW backfill 至 2025-07-01(11-2 月仍有缺口);Track 3 DQ 框架完成并推送 GitHub | 启动 Track 1 文档 |
+| 2026-05-14 | Track 1 文档 Step 1-3 完成(Section 1-4, 6, 7);TW 二次 backfill 完成 10-12 月,但 1-2 月仍缺;已发 follow-up 邮件给 Cal | Track 1 文档 Step 4(PBI Dashboard 映射) |
 
 ---
 
 ## 💎 简历素材沉淀
 
-### Data Onboarding Validation & Cross-team Coordination(2026-05-05)
-
+### Data Onboarding Validation & Cross-team Coordination(2026-05-05 至 14)
 在 Databricks 多源数据接入阶段,主导跨源数据一致性校验:
-
-1. **Source store 配置错误**:通过 5 维证据(domain / vendor / order ID 格式 / 跨源 join 匹配率 / 关键词搜索)定位 Fivetran Shopify connector 误连至同公司另一品牌 store,推动数据接入方修复 connector 配置
-2. **历史数据缺失**:通过区分订单级表与点击级表的语义差异,识别出订单 fact 表 backfill 缺失,推动 12 个月历史数据 backfill
-3. **业务直觉驱动的二次校验**:基于保暖品牌季节性预期,发现 backfill 后仍有 4 个月旺季数据骤降 95% 的异常,推动二次 rerun
-
-**关键词**:Data Source Validation / Multi-source Reconciliation / Data Onboarding QA / Cross-team Stakeholder Communication / Business-driven Data Sanity Check
-
-### Attribution Coverage Analysis(2026-05-13)
-
-在 TW 归因数据接入完成后,通过对比匹配/未匹配订单的画像(订单数、平均订单价值、总收入),识别 44% 的归因覆盖率为 DTC 业务的合理基线(剩余为直接访问与自然流量),指导后续数仓建模将 `channel='direct/unattributed'` 作为合法维度值保留。
-
-**关键词**:Attribution Modeling / Data Coverage Analysis / Business Logic Validation
+- 通过 5 维证据定位 Fivetran connector 误配置,推动修复
+- 识别 TW 历史数据 backfill 缺口,推动多轮 backfill
+- 建立可量化的"数据完整性"判定标准(跨源 month-level match rate ≥ 90%),取代主观判断
+- 实施 source reconciliation(Databricks vs Panoply,8 日累计差异 0.5%)
+**关键词**:Data Source Validation / Multi-source Reconciliation / Cross-team Coordination / Quantitative Completeness Criteria
 
 ### Data Quality Framework(2026-05-13)⭐
+设计并实现 YAML 配置驱动的数据质量校验框架:
+- 抽象基类 + 4 种 checker(not_null / unique / range / freshness)
+- YAML 驱动,业务方 0 代码改动即可新增校验
+- Console + JSON 双格式报告输出
+- 15 个测试场景覆盖单元 + 端到端流程
+**关键词**:Data Quality / Configuration-Driven Architecture / YAML DSL / Extensible Framework Design
 
-设计并实现 YAML 配置驱动的数据质量校验框架,作为多源数据 pipeline 的质量门控:
-
-- **架构**:基于抽象基类(BaseChecker)+ Checker 注册表的可扩展设计,新增 check 类型 0 改动 runner
-- **能力**:支持 4 类校验(not_null / unique / range / freshness),涵盖完整性、唯一性、值域、新鲜度
-- **配置驱动**:业务方修改 YAML 即可新增校验,无需 Python 改动
-- **报告**:支持 console(人读)和 JSON(机器读)双格式输出
-- **可测试**:15 个测试场景覆盖单元与端到端流程
-
-**关键词**:Data Quality / Configuration-Driven Architecture / YAML DSL / Pipeline Quality Gate / Extensible Framework Design
+### Data Asset Inventory & Boundary Documentation(2026-05-14)
+系统性盘点 Databricks 数据资产:
+- 完整数据字典(13 张表,按业务域分类)
+- 明确数据源边界(扫描 8 个周边 schema,逐一记录不纳入决策)
+- 4 个 Open Issues 四段式记录(现象→根因→影响→解决方案)
+- 5 个可复用 SQL 沉淀为 Appendix
+**关键词**:Data Asset Inventory / Data Cataloging / Scope Documentation / Root Cause Analysis
