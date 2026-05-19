@@ -5,9 +5,21 @@
 -- Schema:      mvdevdatabricks.analytics_platform_32degrees
 -- Author:      Sia Song
 -- Created:     2026-05-18
--- Version:     1.0 (Slice 1)
+-- Version:     1.1 (Slice 1)
 -- Slice:       1 of N — supports Style-channel (quantity) PBI page migration
 -- ============================================================================
+--
+-- Changelog
+-- ----------------------------------------------------------------------------
+-- v1.1 (2026-05-18)
+--   - dim_channel: dropped `is_web_attributed` and `is_operational` flags
+--     (Excluded/Non-attributed now display as-is, matching TW UI)
+--   - dim_channel: renamed `ga4_channel_name` to `legacy_channel_group` for
+--     future-proof naming (not tied to GA4 specifically)
+--   - All other tables unchanged
+--
+-- v1.0 (2026-05-18)
+--   - Initial schema design (slice 1)
 --
 -- Purpose
 -- ----------------------------------------------------------------------------
@@ -34,10 +46,11 @@
 --   4. Data window: slice 1 ETL targets 2025-07-01 onwards (overlap with
 --      Triple Whale attribution coverage). Schema itself is temporally
 --      unbounded for future backfill of pre-TW Shopify history.
---   5. Channel meta-categories: Non-attributed (non-web channels like Shop
---      app) and Excluded (operational orders like exchanges/drafts) modeled
---      explicitly with is_web_attributed + is_operational flags rather than
---      dropped, per consultation with TW data owner.
+--   5. Channel display strategy: dim_channel carries BOTH channel_source
+--      (raw TW value, for operations team) AND legacy_channel_group
+--      (GA4-style grouping, for executive familiarity). Same dimension
+--      serves two user groups without forcing either to learn the other's
+--      vocabulary.
 --
 -- Execution
 -- ----------------------------------------------------------------------------
@@ -103,27 +116,29 @@ TBLPROPERTIES ('delta.autoOptimize.optimizeWrite' = 'true');
 -- ----------------------------------------------------------------------------
 -- 15 known TW source values + 1 unknown placeholder (channel_key = -1).
 -- SCD1: monthly refresh from TW source, overwrite semantics.
+--
+-- Dual-display design:
+--   - channel_source: raw TW value (e.g. 'google-ads', 'Excluded')
+--     for operations team consistency with TW UI
+--   - legacy_channel_group: GA4-style grouping (e.g. 'Paid Search')
+--     for executive familiarity with legacy PBI report taxonomy
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS dim_channel (
   channel_key             BIGINT    NOT NULL  COMMENT 'Surrogate key, -1 = unknown',
   channel_source          STRING    NOT NULL  COMMENT 'Raw value from TW.source',
 
-  channel_name            STRING    NOT NULL  COMMENT 'Display name (e.g. Google Ads)',
-  channel_category        STRING    NOT NULL  COMMENT 'Paid Search/Paid Social/Affiliate/Organic/Direct/Meta-Category/Other',
-  channel_platform        STRING              COMMENT 'Google/Meta/Microsoft/etc, NULL if N/A',
+  channel_name            STRING    NOT NULL  COMMENT 'Display name (currently equals channel_source for TW consistency)',
+  legacy_channel_group    STRING              COMMENT 'GA4-style grouping for executive PBI familiarity (Paid Search/Paid Social/Affiliates/Direct/Organic Social/Email-SMS/Other)',
+  channel_platform        STRING              COMMENT 'Underlying platform (Google/Meta/Microsoft/Pinterest/etc), NULL if N/A',
 
-  is_web_attributed       BOOLEAN   NOT NULL  COMMENT 'FALSE for Non-attributed (non-web) and Excluded',
-  is_operational          BOOLEAN   NOT NULL  COMMENT 'TRUE for Excluded (exchanges, drafts)',
-  is_paid                 BOOLEAN   NOT NULL  COMMENT 'TRUE for *-ads channels',
-  is_active               BOOLEAN   NOT NULL  COMMENT 'Default UI hides FALSE channels',
-
-  ga4_channel_name        STRING              COMMENT 'GA4 grouping for dual-taxonomy historical view',
+  is_paid                 BOOLEAN   NOT NULL  COMMENT 'TRUE for *-ads channels (slice 4+ ROAS metric)',
+  is_active               BOOLEAN   NOT NULL  COMMENT 'Default UI hides FALSE channels (long-tail soft-deactivation)',
 
   created_at              TIMESTAMP NOT NULL,
   updated_at              TIMESTAMP NOT NULL
 )
 USING DELTA
-COMMENT 'Channel dimension, SCD1.'
+COMMENT 'Channel dimension with dual-display taxonomy, SCD1.'
 TBLPROPERTIES ('delta.autoOptimize.optimizeWrite' = 'true');
 
 
