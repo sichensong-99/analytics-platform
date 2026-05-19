@@ -1,6 +1,6 @@
 # Project Progress
 
-> Last updated: 2026-05-15
+> Last updated: 2026-05-18 EOD (Day 1 complete — 4 tasks delivered)
 > 每次 chat 结束前,Claude 帮助更新这份文档,然后重新上传到 Project Knowledge
 
 ---
@@ -48,7 +48,7 @@
 - ✅ Section 2: Shopify 8 张表详解
 - ✅ Section 3: TW 5 张表详解
 - ✅ Section 4: 其他 Schema 边界声明(扫了 8 个相关 schema,明确不纳入)
-- 🚧 Section 5: PBI Dashboard 映射(下一步做)
+- ✅ Section 5.1: `Style-channel (quantity)` page 反向工程(见下方独立条目)
 - ✅ Section 6: Open Issues(4 个 issues,每个含根因 + 影响 + 解决方案)
 - ✅ Section 7: Appendix(5 个可复用 SQL)
 - 位置:`docs/existing_data_inventory.md`
@@ -88,6 +88,108 @@
 
 **剩余 5%**:其他 PBI page 的底层数据来源 — 不阻塞 Phase 2B/3,可在 Section 5 边做边补
 
+### Track 1 §5.1 — 第一个 PBI page 反向工程(2026-05-18 完成)⭐
+
+**目标 page**:`Style-channel (quantity)`(PBI 第 2 个 tab)
+
+**产出**:`docs/existing_data_inventory.md` §5.1(完整章节,8 个子节)
+- §5.1.1 Page 全景(4 个 visual:时间滑块、3 个 slicer、折线图、矩阵表)
+- §5.1.2 Visual 详解(每个 visual 的字段、用户角色、决策场景)
+- §5.1.3 数据源追溯(100% 来自 `Style_selling_df`,字段血缘表)
+- §5.1.4 ⭐ 3 个简历级洞察:
+  1. **Conformed fact 服务多角色**(Kimball 教科书案例)
+  2. **BI 派生 vs 源系统物化的时间口径风险**(中高级 DE 才会注意到的细节)⭐
+  3. **行级粒度的不可替代性**(验证双粒度建模设计的正确性)
+- §5.1.5 新平台对应方案(字段映射表 + SQL 查询路径 + YAML 指标草稿)
+- §5.1.6 Channel 口径迁移影响分析(GA4 → TW 双口径方案)
+- §5.1.7 待 Leader 对齐的 3 个口径决策(留给后续会议)
+- §5.1.8 完成检查清单
+
+**新增简历金句**(3 条):
+- "Validated Kimball's conformed fact principle in legacy system reverse engineering — identified a single fact table serving buyer / marketing / merchandiser personas via dimensional slicing."
+- "Identified a latent risk in legacy BI report where tool-derived date hierarchy and source-system-precomputed date fields could disagree on boundary weeks; resolved by introducing a unified `dim_date` conformed dimension."
+- "Architected a dual-taxonomy channel dimension to handle attribution platform migration (GA4 → Triple Whale) with non-overlapping data windows."
+
+### Day 1 — Slice 1 完整交付(2026-05-18)⭐⭐⭐
+
+**方法论转变(关键)**:经讨论锁定采用 **Vertical Slice(垂直切片)** 方法论交付 Phase 2B/3,替代"先全部建完再上线"的瀑布式。每个切片从数据源到前端端到端打通,逐切片扩展数仓。
+
+**切片 1 范围**:
+- 服务于:`Style-channel (quantity)` page 端到端打通 → 给 Leader 看 demo
+- 数据窗口:2025-07-01 起(与 TW attribution 重叠期)
+- 4 张表:`dim_date`, `dim_channel`, `dim_product`, `fact_orders_line`
+- 预计工时:5 天(Day 1 设计 → Day 2-3 ETL → Day 4 服务层 → Day 5 前端)
+
+**Day 1 完整产出(4 个任务)**:
+
+#### 任务 1:星型模型 DDL ✅
+- 文件:`docs/data_modeling/star_schema_ddl.sql`(v1.0 → v1.1)
+- v1.0:4 张表 DDL(dim_date / dim_channel / dim_product / fact_orders_line)
+- v1.1 调整(任务 4 触发):dim_channel 砍 `is_web_attributed` / `is_operational`,重命名 `ga4_channel_name` → `legacy_channel_group`
+- 完整 header 含 changelog / purpose / star schema 图 / 5 大设计决策 / 执行 prerequisites
+
+#### 任务 2:PROGRESS.md 更新 ✅
+- 记录 Day 1 状态,初版决策(Decision 10-14)
+- 阻塞章节:等 Databricks 权限开通
+
+#### 任务 3:dim_date 种子数据生成脚本 ✅
+- 文件:`scripts/generate_dim_date.py` + `scripts/.gitignore`
+- 纯标准库(`datetime` + `csv`)生成 2023-01-01 至 2030-12-31(2,922 行)
+- 可选 pandas + pyarrow 输出 Parquet(Databricks 加载最快格式)
+- 内置 ISO 8601 边界周 sanity check(2024-12-30 → ISO 2025-W01 等)
+- `.gitignore` 排除生成的 .csv / .parquet — 脚本是 source of truth,artifact 可重生成
+
+#### 任务 4:dim_channel 种子 SQL ✅
+- 文件:`docs/data_modeling/dim_channel_seed.sql`
+- 16 行(1 unknown placeholder + 15 TW source 值)
+- TRUNCATE-then-INSERT 模式,幂等可重跑
+- **Dual-display taxonomy 设计**:
+  - `channel_source`(TW 原值,如 `google-ads`)→ 同事用 TW UI 时认知一致
+  - `legacy_channel_group`(GA4 风格,如 `Paid Search`)→ Leader 用旧 PBI 时认知一致
+  - 同一 dim 表服务两类用户,**Conway's Law 在数据建模中的应用**
+- 含验证查询(行数 / 分组 / 付费 / 活跃 channel)
+
+**Day 1 关键设计决策(已锁定,见下方 Decision 10-16)**:
+1. Vertical Slice 方法论(替代瀑布式)
+2. ISO 8601 only date taxonomy(砍 US-week 兼容字段)
+3. SCD1 + YAGNI(SCD2 延期)
+4. Schema temporally unbounded, ETL temporally bounded
+5. Channel taxonomy alignment with TW(同事一致性 > 工程自定义分类)
+6. Dual-display channel dimension(legacy_channel_group 服务 Leader)
+7. is_paid forward-looking flag(切片 4+ ROAS 指标的前瞻设计)
+
+**TW pipeline owner 澄清的两个 meta-category**:
+- `Non-attributed`:其他销售渠道(如 Shopify Shop app),非站内流量
+- `Excluded`:exchanges 或 draft orders 等运营订单
+- 同事说"不 include 也行",但我们**选择保留并显式标注**(显式建模 > 静默丢弃)
+
+**新增简历金句(17 条,本次最大单日产出)**:
+
+设计阶段(7 条):
+1. "Adopted vertical-slice agile delivery on the data platform — built end-to-end pipeline (raw → fact/dim → metric service → portal) for each metric incrementally."
+2. "Standardized date semantics on ISO 8601 across the new analytics platform — single source of truth for all temporal slicing."
+3. "Made deliberate trade-off to defer SCD2 implementation until business case emerges (YAGNI principle)."
+4. "Designed fact tables to be temporally unbounded with ETL job parameters controlling actual data window — enabling incremental backfill without schema changes."
+5. "Through consultation with attribution platform's data owner, discovered platform-specific meta-categories; modeled them explicitly rather than dropping."
+6. "Authored comprehensive DDL header documentation capturing design decisions, execution prerequisites, and slice context."
+7. "Established conventional commits discipline (feat/fix/docs prefixes) for changelog automation readiness."
+
+任务 3 dim_date 生成器(3 条):
+8. "Pre-computed dim_date offline in Python rather than in-warehouse SQL — leveraged mature standard library ISO 8601 implementation over dialect-specific SQL WEEK functions, enabling unit testability and version-controlled date semantics."
+9. "Built deterministic seed data generators with embedded sanity checks for ISO 8601 year-boundary edge cases (e.g., 2024-12-30 belongs to ISO 2025-W01) — preventing silent date semantic drift before production load."
+10. "Practiced 'commit generators, gitignore artifacts' discipline — keeping repos lean and forcing idempotent data generation as a system-level guarantee."
+
+任务 4 dim_channel 设计(4 条):
+11. "Aligned new platform's channel taxonomy with source attribution platform (Triple Whale) — prioritizing user cognitive consistency across tools over engineer-imposed re-categorization."
+12. "Architected a dual-display channel dimension carrying both source-platform naming (Triple Whale) and legacy-grouping naming (GA4-derived) — same dimension serves both operations team and executive without forcing either to learn the other's vocabulary."
+13. "Mitigated platform migration cognitive cost by preserving legacy taxonomy as a denormalized column in the new dimension, demonstrating Conway's Law awareness in data modeling — organizational structure influencing schema design."
+14. "Pre-encoded ad-spend taxonomy via `is_paid` flag in channel dimension, enabling one-line ROAS metric implementation in subsequent slices without dimension migration."
+
+§5.1 反向工程沉淀(3 条):
+15. "Validated Kimball's conformed fact principle in legacy system reverse engineering — single fact table serving buyer / marketing / merchandiser personas via dimensional slicing."
+16. "Identified BI tool-derived date hierarchy vs source-system-precomputed date field semantic drift — resolved via unified dim_date conformed dimension."
+17. "Recognized when dimension setup should be authored as version-controlled seed SQL vs derived from source data — applying low-cardinality + business-judgment principle."
+
 ---
 
 ## ✅ 阻塞解除(2026-05-15)
@@ -119,45 +221,140 @@
 
 ---
 
+## 🚧 当前阻塞中(等 Databricks 权限开通,预计 1-3 个工作日)
+
+**阻塞条件**:Databricks 同事完成以下操作:
+1. 建 schema `mvdevdatabricks.analytics_platform_32degrees`
+2. 给 Sia 该 schema 的 `ALL PRIVILEGES`(CREATE TABLE / MODIFY / SELECT 等)
+3. 建 Volume `mvdevdatabricks.analytics_platform_32degrees.raw_uploads` 用于 ERS CSV 每月上传
+
+**邮件已发**:2026-05-18(用 "With brief context" 版本)
+
+**权限开通后立即可做**:
+1. 跑 DDL 建 4 张表(`docs/data_modeling/star_schema_ddl.sql` v1.1)
+2. 跑 dim_channel 种子 SQL(`docs/data_modeling/dim_channel_seed.sql`)
+3. 上传 ERS CSV 到 Volume(文件名建议:`ers_product_master_YYYYMMDD.csv`)
+4. 跑 dim_date Python 生成脚本,把 Parquet 上传到 Volume
+5. 进入 Day 2 — PySpark notebook 编写
+
+**等待期已完成任务(零返工)**:
+- ✅ 任务 1:DDL 落地 GitHub(v1.1)
+- ✅ 任务 2:PROGRESS.md 第一轮更新
+- ✅ 任务 3:dim_date 种子数据 Python 生成脚本
+- ✅ 任务 4:dim_channel 16 行种子 INSERT SQL
+- ✅ 任务 A:PROGRESS.md EOD 收尾(本次)
+
+---
+
 ## 🎯 下一步具体行动
 
-### 立刻做(本周完成):Section 5 — 第一个 PBI Dashboard 映射
+### 立刻可做(可选,不阻塞下次 chat)
 
-**目标 page**:`Style-channel (quantity)`(PBI 最大 report 的第 2 个 tab)
+**Option 1**:补 `PROJECT_CONTEXT.md` 的 Decision Log(把 Decision 10-16 正式写入,~20 分钟)
 
-**为什么做这个**:
-- ✅ 这是 Phase 2B/3 数仓建模的**需求圣经**(没有它就是不画图纸盖房子)
-- ✅ "需求分析 + 反向工程"是 DE 软实力,简历核心素材
-- ✅ Leader 验收的依据(新 dashboard 至少要 cover 现有功能)
-- ✅ 完成第 1 个 page 后,后面 19 个 page 速度会指数提升(共用 fact)
-- ✅ 0 返工风险
+**Option 2**:写 follow-up email 模板备用(同事 3 天没回时用,~10 分钟)
 
-**已确认的关键信息**:
-- 该 page 的核心数据源:PBI 里的 `Style_selling_df`(来自 Panoply 的 `Style_selling_dfNEW`)
-- 该 page 没有用到 `QuantityParam` / `Threshold` 滑块
-- 该 page 的用户:**整个 ecom 团队共用**(buyer 看补货、marketing 看渠道、merchandiser 看选品)
-- 该 page 的位置:整个 PBI Report 第 2 个 tab(共 20+ tabs)
+**Option 3**:今天到此为止,休息
 
-**操作方式**:
-- 在新 chat 里告诉 Claude "开始 Section 5,从 Style-channel (quantity) page 开始"
-- 提供 page 上每个 visual 的清单 + 业务用途
-- Claude 帮写 `docs/existing_data_inventory.md` Section 5.1
+### 等权限开通后(切片 1 完整路线图)
 
-**预计时间**:1-2 天(第 1 个 page);后续每个 page 0.5-1 天
+| Day | 工作内容 | 产出 |
+|---|---|---|
+| Day 2 | PySpark notebook 建 3 个 dim 表 | `01_build_dim_date.py` / `02_build_dim_channel.py` / `03_build_dim_product.py` |
+| Day 3 | PySpark notebook 建 fact_orders_line | `04_build_fact_orders_line.py`(Shopify + TW 跨源 join) |
+| Day 4 | FastAPI metrics_service 改造 | YAML 指标 `quantity_by_style_channel_week` + 真实 Databricks SQL connector |
+| Day 5 | Next.js page 实现 | 4 个 visual + 端到端 wire up |
+| **Day 5 结束** | **Leader Demo** | 拿电脑给 Leader 看 |
 
-### 之后做:
+### 切片 2+ 路线图
 
-1. **Section 5 全部完成后**(~2 周)
-   - 带着 Section 5 找 Leader 对齐 5 个口径决策(见 `legacy_panoply_etl.md` §10)
+切片 1 完成后,继续切片 2(Style-channel **Revenue** page,fact 表零 ETL 返工,只加 YAML 指标 + Next.js page),然后切片 3(退货分析,新增 `fact_refund_line` + `dim_refund_reason`)。详细规划见 `legacy_panoply_etl.md` + `existing_data_inventory.md`。
 
-2. **Track 2:星型模型设计**(2-3 天)
-   - 基于 Section 5 的需求 → 设计 fact + dim
-   - Mermaid 画星型模型 ER 图
+---
 
-3. **Phase 2B/3:Databricks 数仓建模**(3-4 周)— 大头
-   - ODS / DWD / DWS 三层
-   - 5 个 PySpark notebooks
-   - 这是简历核心素材
+## 🔖 待后续处理的备忘
+
+### 备忘 1:Page_view report 数据导出(同事需求)
+
+**状态**:🟢 已解决(Panoply 已修复,Sia 直接在 Panoply 跑原 SQL 给同事)
+
+**完整依赖链已分析**(下次新平台要做这个 page 时直接用):
+```
+Page_view
+├── Shopify_sales_data
+│   ├── shopify_orders_order ✅
+│   ├── shopify_orders_order_line_items ✅
+│   ├── customer_type_info ⚠️ 需重建(逻辑见聊天记录或下次重新分析)
+│   ├── refund4 ← refund1_news ⚠️ 需重建(见 legacy_panoply_etl.md §3)
+│   ├── shopify_products_product ⚠️ 在 Databricks `shopify_32degrees` schema 里没找到对应表
+│   └── mysql_ers ✅
+└── GA4 数据
+    ├── ga4_landing_page2 ❌ 不在 Databricks 数据源边界内
+    └── ga4_sessions2 ❌ 同上
+```
+
+**待补到 `legacy_panoply_etl.md` 的 2 个新简历亮点**(下次正式整理时加):
+- **亮点 #14**:**Anti-bulk-bias 过滤**(`where total_order_qty <= 30` 排除 B2B 大单污染 retail behavior 分析)— 统计正确性意识
+- **亮点 #15**:**Customer Cohort Classification**(用 `panoply_order_count vs total_order_count` 差值识别 Panoply 接入前的历史客户,避免老客户被误判为 first-time)— incremental sync data integrity 经典案例 ⭐
+
+**已加入 `PROJECT_CONTEXT.md` 的 Decision 9**:TW 替代 GA4 仅限 attribution layer,page-level funnel metrics 不在 TW 范围内。
+
+### 备忘 2:Databricks Shopify schema 表清单(2026-05-18 确认)
+
+23 张表:
+```
+customer / customer_address / customer_tag / customer_tax_exemption
+discount_allocation / discount_application
+fulfillment / fulfillment_order_line
+order / order_adjustment / order_discount_code
+order_line / order_line_refund / order_note_attribute
+order_shipping_line / order_shipping_tax_line / order_tag / order_url_tag
+refund / return / return_line_item
+tax_line / transaction
+```
+
+**与 Panoply 旧表名映射**(下次建模会用到):
+| Panoply 表名 | Databricks 表名 | 备注 |
+|---|---|---|
+| `shopify_orders_order` | `order` | |
+| `shopify_orders_order_line_items` | `order_line` | |
+| `shopify_orders_order_refunds` | `refund` | |
+| `shopify_orders_order_refunds_refund_line_items` | `order_line_refund` | ⚠️ 名字变了 |
+| `shopify_orders_order_customer` | `customer`(可能合并)| 待验证 |
+| `shopify_products_product` | ❓ 没找到 | 需要找(可能在其他 schema,或 Fivetran 没接入)|
+| `shopify_customer_customers` | `customer` | 待验证 |
+
+### 备忘 3:TW Channel 15 个 distinct source 值(2026-05-18 盘点)
+
+```
+google-ads       956,049  → legacy_channel_group = Paid Search    (Google)     is_paid=T is_active=T
+facebook-ads     923,527  → legacy_channel_group = Paid Social    (Meta)       is_paid=T is_active=T
+impact           396,951  → legacy_channel_group = Affiliates     (Impact)     is_paid=T is_active=T
+bing              92,269  → legacy_channel_group = Paid Search    (Microsoft)  is_paid=T is_active=T
+Excluded          58,262  → legacy_channel_group = Other          (—)          is_paid=F is_active=T  ⚠️ TW meta
+Direct            53,684  → legacy_channel_group = Direct         (—)          is_paid=F is_active=T
+Non-attributed    18,498  → legacy_channel_group = Other          (—)          is_paid=F is_active=T  ⚠️ TW meta
+organic_and_social 14,936 → legacy_channel_group = Organic Social (—)          is_paid=F is_active=T
+influencers          815  → legacy_channel_group = Affiliates     (—)          is_paid=F is_active=T
+pinterest-ads        135  → legacy_channel_group = Paid Social    (Pinterest)  is_paid=T is_active=F
+snapchat-ads           2  → legacy_channel_group = Paid Social    (Snapchat)   is_paid=T is_active=F
+tiktok-ads             1  → legacy_channel_group = Paid Social    (TikTok)     is_paid=T is_active=F
+smsbump                1  → legacy_channel_group = Email/SMS      (SMSBump)    is_paid=F is_active=F
+superfiliate           1  → legacy_channel_group = Affiliates     (Superfiliate) is_paid=F is_active=F
+applovin               1  → legacy_channel_group = Paid Social    (AppLovin)   is_paid=T is_active=F
++ unknown placeholder (channel_key=-1)
+= 16 行 dim_channel 种子数据(已落地为 dim_channel_seed.sql)
+```
+
+Top 7 覆盖 99%+ 流量(default-visible),长尾 8 个 is_active=FALSE(default-hidden via UI toggle)。
+
+### 备忘 4:Excluded 订单分析(切片 3 退货可能需要)
+
+**Open question**:做退货 / 替换分析时,Excluded(exchanges/drafts)订单是否需要看?
+
+- **当前 v1 设计**:`Excluded` channel 跟其他 channel 一样显示,不特殊处理
+- **切片 3 时可能需要**:看 exchange 订单原本来自哪个 channel → 需要 fact 表加 `original_channel_key` 字段
+- **现在不做**:不阻塞切片 1,标记备忘后续处理
 
 ---
 
@@ -171,10 +368,15 @@
 - 风格:中英文混用,代码要完整版,命令要解释清楚,决策要明确推荐
 
 ### 数据源现状
-- **Shopify** @ `mvdevdatabricks.shopify_32degrees`:✅ 完全 ready(2.4M 订单)
+- **Shopify** @ `mvdevdatabricks.shopify_32degrees`:✅ 完全 ready(2.4M 订单,23 张表清单见备忘 §2)
 - **TW** @ `mvdev_federated_catalog.triple_whale`:✅ **完全 ready**(全部月份 ≥ 99.85% match rate)
-- **ERS 产品主数据**:✅ 已在 Databricks(Sia 上传)
+- **ERS 产品主数据**:⏳ 待 Sia 月度上传到 `mvdevdatabricks.analytics_platform_32degrees.raw_uploads` Volume(等权限开通)
 - **数据完整性判定标准**:跨源 monthly match rate ≥ 90%(实际达到 99%+)
+
+### 新数仓 Schema
+- **位置**:`mvdevdatabricks.analytics_platform_32degrees`(等同事建好)
+- **当前 DDL**:`docs/data_modeling/star_schema_ddl.sql`(v1.1,4 张表)
+- **种子数据**:`docs/data_modeling/dim_channel_seed.sql`(16 行)+ `scripts/generate_dim_date.py`(2922 行可生成)
 
 ### 已锁定的关键决策(不要翻盘)
 - Shopify 走 Fivetran,TW 走 custom pipeline
@@ -182,6 +384,14 @@
 - 数据源边界 = Shopify + TW + ERS(其他 schema 不纳入)
 - 项目数据起点 = 2023-07-01(2023/7/1 之前的 GA UA 历史不纳入)
 - 数据接入工具理解:`mvdev_federated_catalog` 不是真的 federation,只是命名误导
+- **Decision 9**:TW 替代 GA4 仅限 attribution layer,funnel metrics(浏览/加购/sessions)不覆盖
+- **Decision 10(2026-05-18)**:采用 Vertical Slice 方法论交付 Phase 2B/3,切片化端到端打通
+- **Decision 11(2026-05-18)**:Date taxonomy 用 ISO 8601 only,不保留 US-week 兼容字段
+- **Decision 12(2026-05-18)**:Dimension 表用 SCD1,SCD2 延期至实际业务需求出现(YAGNI)
+- **Decision 13(2026-05-18)**:切片 1 ETL 数据窗口 = 2025-07-01 起,Schema 设计 temporally unbounded 留扩展空间
+- **Decision 14(2026-05-18)**:Channel meta-category(Non-attributed / Excluded)显式建模,不 drop(初版)
+- **Decision 15(2026-05-18)**:Channel 显示策略:`channel_source` 保留 TW 原值 + 加 `legacy_channel_group` 字段(GA4 风格分组),dual-display 服务 TW 同事 + PBI Leader 两类用户。**Excluded / Non-attributed 跟 TW UI 一样显示,不隐藏**(取代 Decision 14 的"显式过滤"思路,简化为"显式显示")
+- **Decision 16(2026-05-18)**:`is_paid` flag 保留作为 forward-looking design,服务切片 4+ ROAS 指标(避免后续 ALTER TABLE)。`is_web_attributed` / `is_operational` 砍掉(失去用途)
 
 ### 工作原则
 - **任何建议必须用 NORTH_STAR.md 的 5 大原则过滤一遍**
@@ -192,13 +402,16 @@
 
 ### 关键文档清单
 - `NORTH_STAR.md` — 最高决策原则
-- `PROJECT_CONTEXT.md` — 项目背景、架构、决策
+- `PROJECT_CONTEXT.md` — 项目背景、架构、决策(含 Decision 1-16)⚠️ Decision 10-16 尚未同步到 PROJECT_CONTEXT,见上方建议任务
 - `ROADMAP.md` — 阶段计划
 - `PROGRESS.md` — 本文档,当前进度
 - `SIA_PROFILE.md` — Sia 偏好
 - `streaming_module_plan.md` — Phase 4.5 计划
-- `docs/existing_data_inventory.md` — Track 1 数据资产盘点
-- `docs/legacy_panoply_etl.md` — Panoply 反向工程(13 个简历亮点的金矿)⭐
+- `docs/existing_data_inventory.md` — Track 1 数据资产盘点(含 §5.1)⭐
+- `docs/legacy_panoply_etl.md` — Panoply 反向工程(13 个简历亮点的金矿,待补 #14/#15)⭐
+- `docs/data_modeling/star_schema_ddl.sql` — 切片 1 星型模型 DDL v1.1 ⭐
+- `docs/data_modeling/dim_channel_seed.sql` — 切片 1 channel 种子数据 ⭐ NEW
+- `scripts/generate_dim_date.py` — dim_date 种子数据 Python 生成器 ⭐ NEW
 
 ---
 
@@ -211,6 +424,8 @@
 | 2026-05-13 | Shopify 数据修复完成;TW backfill 至 2025-07-01(11-2 月仍有缺口);Track 3 DQ 框架完成并推送 GitHub | 启动 Track 1 文档 |
 | 2026-05-14 | Track 1 文档 Step 1-3 完成(Section 1-4, 6, 7);TW 二次 backfill 完成 10-12 月,但 1-2 月仍缺;已发 follow-up 邮件给 Cal | Track 1 文档 Step 4(PBI Dashboard 映射) |
 | 2026-05-15 | TW 数据 backfill 完成验证,全部月份 ≥ 99.85% match rate;Panoply Legacy 反向工程 95% 完成,产出 `legacy_panoply_etl.md` v3;识别 13 个简历亮点 | 启动 Section 5(从 Style-channel quantity page 开始) |
+| 2026-05-18 (上半) | §5.1 完成(`Style-channel (quantity)` page),3 个简历洞察沉淀;Decision 9 加入 PROJECT_CONTEXT;Page_view 同事需求已通过 Panoply 修复后解决 | 决定将 quantity page 作为切片 1 端到端实施 |
+| 2026-05-18 (EOD)⭐⭐⭐ | **Day 1 完整交付 4 任务**:星型模型 DDL v1.1 / PROGRESS 更新 / dim_date 生成脚本 / dim_channel 种子 SQL;Vertical Slice 方法论锁定;Decision 10-16 全部锁定;**17 条简历金句一日产出** | 等 Databricks 权限开通 → Day 2 PySpark notebooks |
 
 ---
 
@@ -222,6 +437,7 @@
 - 识别 TW 历史数据 backfill 缺口,推动多轮 backfill 直至完整
 - 建立可量化的"数据完整性"判定标准(跨源 month-level match rate ≥ 90%,实际达到 99%+),取代主观判断
 - 实施 source reconciliation(Databricks vs Panoply,8 日累计差异 0.5%)
+
 **关键词**:Data Source Validation / Multi-source Reconciliation / Cross-team Coordination / Quantitative Completeness Criteria
 
 ### Data Quality Framework(2026-05-13)⭐
@@ -230,6 +446,7 @@
 - YAML 驱动,业务方 0 代码改动即可新增校验
 - Console + JSON 双格式报告输出
 - 15 个测试场景覆盖单元 + 端到端流程
+
 **关键词**:Data Quality / Configuration-Driven Architecture / YAML DSL / Extensible Framework Design
 
 ### Data Asset Inventory & Boundary Documentation(2026-05-14)
@@ -238,6 +455,7 @@
 - 明确数据源边界(扫描 8 个周边 schema,逐一记录不纳入决策)
 - 4 个 Open Issues 四段式记录(现象→根因→影响→解决方案)
 - 5 个可复用 SQL 沉淀为 Appendix
+
 **关键词**:Data Asset Inventory / Data Cataloging / Scope Documentation / Root Cause Analysis
 
 ### Legacy Panoply ETL Reverse Engineering(2026-05-15)⭐⭐
@@ -247,6 +465,7 @@
 - 起草 11 个英文简历 Bullets + 2 个 STAR 面试故事
 - 提供"Legacy → New Platform"演进映射方案
 - 详见 `docs/legacy_panoply_etl.md`
+
 **关键词**:Legacy System Reverse Engineering / Multi-grain Modeling / Schema Evolution / Business Rule Refactoring / BI Layer Decoupling / Kimball Methodology
 
 **核心亮点**(可直接用于简历英文 bullet,详见 `legacy_panoply_etl.md` §8.2):
@@ -256,3 +475,45 @@
 4. **Multi-grain Fact Modeling**:行级 + 订单级双 fact 表(Kimball 原则)
 5. **Temporal Data Source Switching**:GA UA → GA4 平滑迁移
 6. **BI Layer Decoupling**:DAX 构造下沉到数据层
+
+### PBI Dashboard Reverse Engineering — §5.1 First Page(2026-05-18)⭐
+完成 Track 1 文档 §5.1,反向工程 `Style-channel (quantity)` page(PBI 第 2 个 tab):
+- 4 个 visual 完整解构 → 100% 来自单一 fact `Style_selling_df`
+- 验证 Kimball "conformed fact + 多角色"原则在生产系统的应用
+- **识别 BI 工具派生 vs 源系统物化的时间口径风险**(中高级 DE 级别洞察)⭐
+- 设计 GA4 → TW 双口径 channel dimension 过渡方案
+- 完整字段映射 + YAML 指标定义草稿,为 Phase 2B/3 建模提供需求输入
+
+**关键词**:BI Reverse Engineering / Requirements Reverse Engineering / Conformed Dimension Design / BI Layer Decoupling / Date Semantics Standardization
+
+### Vertical-Slice Agile Delivery & Slice 1 Star Schema Design(2026-05-18)⭐⭐
+采用 vertical-slice 方法论交付 Kimball 数仓,首切片端到端打通(数据源 → 数仓 → 指标服务 → 前端 portal):
+- 锁定 5 天交付计划(Day 1 设计 → Day 2-3 ETL → Day 4 服务层 → Day 5 前端),Day 5 给 Leader demo
+- 5 个工程化设计决策锁定(Vertical Slice / ISO 8601 / SCD1 YAGNI / Schema-ETL 解耦 / Channel meta-category 显式建模)
+- 与 TW 数据 owner 协作澄清 platform-specific meta-categories,显式建模而非 drop
+- DDL 文件 header 包含完整设计决策记录,任何 reviewer 可独立理解 schema 演进逻辑
+- 建立 conventional commits 规范
+
+**关键词**:Vertical-Slice Agile Delivery / Iterative Stakeholder Feedback / MVP-first Risk-driven Development / YAGNI Principle / Kimball Star Schema / SCD1 / ISO 8601 Standardization / Channel Meta-Category Modeling / Conventional Commits Discipline / Self-documenting DDL
+
+### Deterministic Seed Data Generation — dim_date(2026-05-18)⭐ NEW
+设计可重跑、可测试的种子数据生成器替代 in-warehouse SQL 计算:
+- Python 标准库 `datetime.isocalendar()` 实现 ISO 8601 边界周(避免 SQL 方言行为不一致)
+- 内置 sanity check 验证 ISO 8601 跨年周边界(如 2024-12-30 → ISO 2025-W01)
+- 双输出格式:CSV(可读、diff-friendly)+ Parquet(Databricks 加载最快)
+- 实践 "commit generators, gitignore artifacts" 原则
+- 位置:`scripts/generate_dim_date.py`
+
+**关键词**:Deterministic Seed Generation / Python over SQL for Date Semantics / Embedded Sanity Checks / Idempotent Pipelines / Generators-as-source-of-truth
+
+### Dual-Display Channel Dimension Design(2026-05-18)⭐⭐ NEW
+设计双显示口径的 channel 维度表,服务多种 stakeholder 认知:
+- `channel_source` 保留 Triple Whale 原值 → 与 TW UI 一致,服务运营团队
+- `legacy_channel_group` 加入 GA4 风格分组 → 服务高管对 PBI 报表的认知惯性
+- 同一 dim 表服务两种用户,不强迫任何一方学对方的术语
+- 体现 Conway's Law 在数据建模中的应用 — 组织结构影响 schema 设计
+- 前瞻设计 `is_paid` flag 服务切片 4+ ROAS 指标(避免后续 ALTER TABLE)
+- 16 行预先 INSERT 种子 SQL,版本控制业务分类决策
+- 位置:`docs/data_modeling/dim_channel_seed.sql`
+
+**关键词**:Dual-Display Dimension / Conway's Law / Stakeholder-Aware Schema Design / Forward-Looking Dimension Flags / Version-Controlled Seed SQL / Platform Migration Cognitive Cost Mitigation
