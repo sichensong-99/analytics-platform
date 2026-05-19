@@ -1,0 +1,3 @@
+﻿# Generated seed data — regenerate by running generate_dim_date.py
+dim_date_seed.csv
+dim_date_seed.parquet
