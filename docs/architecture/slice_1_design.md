@@ -200,8 +200,11 @@ The Panoply legacy system implements this page via `Style_selling_df`, a row-lev
 | Refresh | Manual monthly upload by Sia |
 | Volume | ~50K SKUs |
 | Owner | Sia |
-| Validation status | ⏳ Pending — needs Volume creation (blocked on Databricks permission) |
+| Schema versions supported | **Two** — legacy (pre-2026 redesign) + current (post-2026 redesign). Auto-detected at ingest. |
+| Validation status | ✅ Volume `raw_uploads` already exists |
 | Fallback strategy | If a SKU is not found in ERS, follow legacy graceful-degradation pattern: try `item_description` match before defaulting to `dim_product.product_key = -1` (unknown product placeholder, slot reserved in dim_product) |
+
+**Dual ERS schema support**: The ERS team revised the product master export format in 2026, renaming `Unique_Identifier` → `SKU`, `Vend_ID` → `Style#`, `Item_Description` → `Item Description`, etc., and adding columns for Geodis logistics and Ladder forecasting. Notebook 03 detects which version is present by the disambiguating column (`Unique_Identifier` for legacy, `SKU` for current) and normalizes both to a single canonical internal schema. The 7 slice-1-required canonical columns are: `sku, vend_id, item_description, season, group_name, gender, class_name`. Additional optional columns (`upc, master_style, sku_status, color, size, cost, retail`) are preserved when present for slices 3+.
 
 ---
 
@@ -421,7 +424,21 @@ This replicates the Panoply legacy pattern (see `legacy_panoply_etl.md` §2.3 Tr
 
 ### 8.7 Timezone normalization
 
-`order.processed_at` is UTC. The business operates in EST. Following the legacy convention (`legacy_panoply_etl.md` §2.3 Trick 10), the `date_key` is derived from `processed_at - 5h`. We use a fixed -5h offset (matches legacy) rather than DST-aware conversion for slice 1; DST nuance is documented as a known approximation (sub-1% impact on weekly aggregates).
+`order.processed_at` is UTC. The business operates from New York, which is **`America/New_York` time zone — EST (UTC-5) in winter, EDT (UTC-4) in summer**, transitioning twice a year per US DST rules.
+
+The legacy Panoply pipeline used a static `processed_at - 5h` offset year-round, which is incorrect during EDT (March–November). This produces a ~1% systematic error on cross-midnight orders during the summer half-year — orders placed in EDT shortly after midnight local time get attributed to the previous day.
+
+**Slice 1 corrects this**. We derive `date_key` via Spark's `from_utc_timestamp(processed_at, 'America/New_York')`, which automatically handles DST transitions:
+
+```python
+fact_with_date = (
+    fact_pre
+        .withColumn("processed_at_local", F.from_utc_timestamp(F.col("processed_at"), "America/New_York"))
+        .withColumn("date_key", F.date_format(F.col("processed_at_local"), "yyyyMMdd").cast("int"))
+)
+```
+
+**Reconciliation note**: Day 5 reconciliation against Panoply legacy will show small (<1%) differences on dates near DST transition boundaries (specifically the late-evening UTC hours of: 2025-11-02 EDT→EST transition, 2026-03-09 EST→EDT transition). These are intentional corrections, not bugs, and will be called out in the demo as a quality improvement over the legacy system.
 
 ### 8.8 Final fact_orders_line column derivation
 
@@ -443,14 +460,26 @@ This replicates the Panoply legacy pattern (see `legacy_panoply_etl.md` §2.3 Tr
 
 Slice 1 reuses the YAML-driven DQ framework built in Track 3 (`metrics-service/data_quality/`). Four checks are configured for slice 1.
 
-### 9.1 DQ checks
+### 9.1 DQ checks (multi-tier SLO design)
 
-| Check | Type | Target | Threshold | Failure behavior |
-|---|---|---|---|---|
-| DQ-1: dim PK uniqueness | `unique` | All three dim tables' PKs | 100% unique | Pipeline fails, alert |
-| DQ-2: fact FK referential integrity | `not_null` (against keys after resolution) | `fact_orders_line.{date_key, channel_key, product_key}` after COALESCE-to-(-1) | < 0.1% rows with -1 channel_key, < 1% with -1 product_key | Warning if exceeded, not fatal |
-| DQ-3: fact freshness | `freshness` | `fact_orders_line._ingest_at` | max within last 36 hours | Warning |
-| DQ-4: fact row count range | `range` | Slice 1 window total row count | Between 8M and 12M | Warning |
+Following SRE-style multi-tier Service Level Objective discipline: distinguish PASS (normal), WARN (operational signal, pipeline continues), and FAIL (data integrity breach, pipeline aborts). Thresholds are **calibrated against the empirically observed healthy baseline** (TW ↔ Shopify cross-source match rate ≥ 99.85% across 11 validated months), with ~3x buffer for normal variation and ~14x buffer for failure trigger.
+
+| Check | Type | Target | PASS | WARN | FAIL |
+|---|---|---|---|---|---|
+| DQ-1: dim PK uniqueness | `unique` | All three dim PKs | 100% unique | — | Any duplicate (hard fail) |
+| DQ-2: fact channel resolution | `pct_unresolved` | `fact_orders_line.channel_key = -1` | < 0.5% | 0.5% ≤ x < 2% | ≥ 2% |
+| DQ-3: fact product resolution | `pct_unresolved` | `fact_orders_line.product_key = -1` | < 1% | 1% ≤ x < 5% | ≥ 5% |
+| DQ-4: fact freshness | `freshness` | `fact_orders_line._ingest_at` | within last 24h | 24-36h | > 36h |
+| DQ-5: fact row count range | `range` | Slice 1 window row count | 8M–12M | outside range | — (WARN only) |
+
+**Rationale for thresholds (channel)**:
+- Baseline unmatched rate observed: 0.15% (= 1 - 99.85%)
+- PASS < 0.5% → ~3x baseline buffer, absorbs normal variation without alert fatigue
+- FAIL ≥ 2% → ~14x baseline, indicating clear upstream anomaly (e.g., the 5/5 incident of 44% match rate that prompted TW backfill)
+
+**Rationale for thresholds (product)**:
+- Product resolution is looser because ERS upload cadence is monthly — new Shopify SKUs may appear before the next ERS sync, creating expected drift.
+- WARN at 1% surfaces the operational signal to upload ERS; FAIL at 5% indicates ERS upload is severely behind or broken.
 
 ### 9.2 Reconciliation against Panoply legacy
 
