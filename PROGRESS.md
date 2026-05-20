@@ -1,7 +1,29 @@
-# Project Progress
+### 2026-05-19 — Pre-permission preparation tasks (P0 A/B/C/D) 完成
 
-> Last updated: 2026-05-18 EOD (Day 1 complete — 4 tasks delivered)
-> 每次 chat 结束前,Claude 帮助更新这份文档,然后重新上传到 Project Knowledge
+权限到位前的 4 个零返工准备任务已完成,代码层 Day 2-3 完全 ready。
+
+**完成清单**:
+- ✅ Task A: Decision Log 新增 Decision 10-16(7 条架构决策正式归档)
+- ✅ Task C: `scripts/generate_dim_date.py` 本地脚本验证,2922 行 CSV/Parquet 输出正常
+- ✅ Task B: `docs/architecture/slice_1_design.md`(~700 行 19 sections)— 端到端架构设计文档,涵盖数据源/星型模型/跨源 join 策略/DQ/性能/Schema 演进/回滚/测试/部署/风险/Open Questions
+- ✅ Task D: `databricks-notebooks/slice_1/` 4 个 PySpark notebook 骨架 + README:
+  - `01_build_dim_date.py` — ISO 8601 边界 case 验证
+  - `02_seed_dim_channel.py` — 版本化 seed SQL 驱动
+  - `03_build_dim_product.py` — **ERS 双格式 schema-detection 自动识别**(legacy + post-2026 redesign)+ 三 pass 优雅降级
+  - `04_build_fact_orders_line.py` ⭐ — **DST-aware 时区**(`from_utc_timestamp('America/New_York')`)+ **multi-tier DQ**(PASS/WARN/FAIL,阈值基于 0.15% 实际 baseline 校准)+ Last-touch Window 去重 + Cross-type join
+
+**新增简历关键词**:
+- Schema-evolution-tolerant ingestion(双格式 ERS)
+- DST-aware timezone correction(发现并修正 legacy bug)
+- Multi-tier DQ SLO calibrated against empirical baseline
+- Authored end-to-end architecture design doc before implementation
+
+**当前阻塞 → 已解除路径明确**:
+- Databricks 同事 2026-05-19 邮件确认 admin 权限已开通(在 `mvdevdatabricks.32degrees`)
+- 已回信请求一个独立 schema `mvdevdatabricks.analytics_platform_32degrees`,避免命名空间与其他项目混杂
+- 预计 1-2 个工作日内拿到新 schema → 立即启动 Day 2
+
+**等待期下一步**:Task E(YAML 指标定义)→ Task F(Next.js mock UI)→ Task G(DQ YAML 配置)
 
 ---
 
