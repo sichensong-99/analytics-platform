@@ -539,3 +539,113 @@ Top 7 覆盖 99%+ 流量(default-visible),长尾 8 个 is_active=FALSE(default-h
 - 位置:`docs/data_modeling/dim_channel_seed.sql`
 
 **关键词**:Dual-Display Dimension / Conway's Law / Stakeholder-Aware Schema Design / Forward-Looking Dimension Flags / Version-Controlled Seed SQL / Platform Migration Cognitive Cost Mitigation
+
+---
+
+### 2026-05-19 — Pre-permission Preparation Day(P0 / H Tasks 大批量交付)⭐⭐⭐
+
+**总览**:权限到位前的"零返工准备日",一日内完成 7 个任务交付,所有 Slice 1 Day 2-5 代码层 + 设计层 + 工具层全部就绪。等同事开通独立 schema(已发邮件 + follow-up)后直接启动 Day 2。
+
+**完成清单**:
+
+#### Task A:Decision Log 10-16 写入 PROJECT_CONTEXT.md ✅
+- 7 条架构决策从备注状态正式归档:Vertical Slice / ISO 8601 / SCD1 YAGNI / Schema-ETL 解耦 / Channel meta-category 显式建模 / Dual-display channel / `is_paid` forward-looking
+- 30 分钟整理,纯文档化已锁定决策
+
+#### Task B:Slice 1 Architecture Design Doc ✅ ⭐⭐⭐
+- 文件:`docs/architecture/slice_1_design.md`(~700 行,19 sections)
+- 覆盖:Executive summary / 5 success criteria / 数据源(3 源)/ 星型模型 ER 图 / ETL 模块划分 / **Cross-source Join Strategy(技术核心)** / DQ Plan / Performance / Schema Evolution & Rollback / Metrics Layer Contract / Frontend wire-up / Testing / 5-day Deployment Run Order / Risk Register / Open Questions
+- 这是面试讲项目时直接可以展示的工程化文档,体现 "Design Before Code" 工程实践
+
+#### Task C:`generate_dim_date.py` 本地脚本验证 ✅
+- 跑通 CSV 输出(2922 行,2023-01-01 至 2030-12-31)
+- 验证 ISO 8601 边界 case(2024-12-30 → ISO 2025-W01)
+- 提前发现并解决脚本 bug,避免 Day 2 浪费时间
+
+#### Task D:4 个 PySpark Notebook 骨架 ✅ ⭐⭐⭐⭐⭐
+- 位置:`databricks-notebooks/slice_1/`
+- `01_build_dim_date.py` — ISO 8601 双 spot check(2024-12-30 + 2025-12-29 跨年边界)
+- `02_seed_dim_channel.py` — 版本化 seed SQL 驱动 + dual-display 验证
+- `03_build_dim_product.py` — **ERS 双格式 schema-detection 自动识别**(legacy + post-2026 redesign)+ 三 pass 优雅降级
+- `04_build_fact_orders_line.py` ⭐ — 技术核心:
+  - **Last-touch Window 去重**(`row_number() over (partition by tw_order_id order by position desc, click_date desc)`)
+  - **Cross-type join**(Shopify BIGINT cast STRING ⨝ TW STRING)
+  - **DST-aware 时区**(`from_utc_timestamp('America/New_York')`,修正 legacy 静态 -5h bug)
+  - **Multi-tier DQ**(PASS < 0.5% / WARN 0.5-2% / FAIL ≥ 2%,基于 0.15% baseline 校准)
+  - Broadcast joins + Z-ORDER 物理布局优化
+  - Smoke vs Full run mode
+  - Idempotent overwrite
+
+#### Task H2:Reconciliation Methodology + Tooling ✅ ⭐⭐⭐⭐
+- 位置:`docs/reconciliation/`
+- 5 个产出:README methodology / 新平台 SQL / Panoply legacy SQL / Python diff 脚本 / Excel 彩色报告生成
+- **PASS/WARN/FAIL/MISSING** 四级分类 + 颜色编码,Leader-readable
+- 完成本地 dry-run 验证(用 mock 数据)
+- **Demo 1 的信任核心物料**:Day 5 跑一下出报告,Leader 看到 < 2% diff 立刻信任迁移
+
+#### Task H5:Decision Log 17-19 + Remaining Tasks Tracker ✅
+- Decision 17: DST-aware timezone correction
+- Decision 18: Multi-tier DQ SLO with empirical baseline calibration
+- Decision 19: ERS dual-schema ingestion
+- PROJECT_CONTEXT 末尾新增 "Remaining Tasks Tracker" — 明确 P0 / H 加分项 / 阻塞中 / 后期 Phase 全景
+
+#### Task H4:Phase 4 Workflows Orchestration Design Doc ✅ ⭐⭐⭐⭐
+- 文件:`docs/architecture/phase4_orchestration_design.md`(~750 行,17 sections)
+- 覆盖:DAG 拓扑 / 触发策略 / Retry policy / **DQ-as-Gate Pattern**(简历核心)/ Slack/Email 告警 / **Staged Migration: Full → Incremental Load with updated_at watermark + 2-day lookback** / Idempotency / Config as Code / **Workflows vs Airflow Trade-off**(面试 canonical question 答案)/ Risk Register / 5-day 实施计划
+- Phase 4 真做时直接照着实施,无需重新设计
+
+---
+
+**本日产出量化**:
+- ✅ 7 个任务全部 commit + push GitHub
+- ✅ 新增 Decision 10-19(10 条架构决策)
+- ✅ 约 25-30 条新简历金句
+- ✅ ~3000 行代码 + 文档
+- ✅ 8 次 git push
+
+---
+
+**新增简历核心关键词**(本日精华):
+
+**工程化思维**:
+- Design Before Code(authored 700-line + 750-line architecture design docs)
+- Schema Evolution Tolerance(ERS dual-format auto-detection)
+- Legacy Bug Correction(DST timezone fix)
+- Multi-tier DQ SLO Calibrated Against Empirical Baseline
+- DQ-as-Gate Pattern(production pipeline integrity contract)
+- Staged Migration Strategy(full → incremental with watermark)
+- Forward-looking Design(`is_paid` flag for slice 4+ ROAS)
+
+**技术核心**:
+- Deterministic Multi-touchpoint Deduplication via Window Function
+- Cross-source Heterogeneous-type Join(BIGINT ↔ STRING)
+- Graceful Degradation Entity Resolution(three-pass: exact → fallback → sentinel)
+- Broadcast Join Optimization for Small Dimensions
+- Delta Lake Partition + Z-ORDER Physical Layout Tuning
+
+**Stakeholder & Process**:
+- Quantitative Reconciliation Methodology(< 2% diff threshold as trust gate)
+- Multi-channel Alerting(Slack + Email + Success Digest)
+- Workflows vs Airflow Trade-off with Decision-flip Conditions
+
+---
+
+**当前阻塞**:等同事开通独立 schema `mvdevdatabricks.analytics_platform_32degrees`(已发邮件,正在等待回复)。当前 `mvdevdatabricks.32degrees` 已有同事的 38 张 PO 项目表,共用会污染简历叙事的命名空间清晰度。
+
+**剩余 P0 任务**(明天一次性批量推):
+- Task E:YAML 指标定义 `quantity_by_style_channel_week`(需要看现有 yaml 风格)
+- Task F:Next.js mock UI(需要看现有 frontend 代码风格)
+- Task G:DQ YAML 配置 4 张表(需要看现有 DQ yaml 风格)
+
+**剩余 H 加分项**(可选):
+- H3:补 `existing_data_inventory.md` §5.2-5.N PBI 页映射
+- H6:Demo script(Task F 完成后做)
+
+**等同事开通后立即可做**:Day 2 跑 notebook 01/02/03 → Day 3 跑 notebook 04 → Day 4 FastAPI 真连 → Day 5 wire up + reconciliation + Leader demo。
+
+---
+
+**关键学习**:
+- **零返工保证策略奏效**:所有今日工作都基于已锁定的 DDL v1.1 + 已探测的 schema(99%+ match),没有任何因数据未来变化导致返工的风险。
+- **反工作惯性纪律**:今晚多次出现"再做一个"的冲动,Claude 协助识别为焦虑驱动而非产出需求,引导收尾。坚持北极星第五原则:**基于反馈迭代,不焦虑式堆砌**。
+- **一次性批量贴代码 > 分多次切换**:Task E/F/G/H3 共同点都是需要看现有代码风格,锁定明天一次性贴完,避免上下文切换成本。
