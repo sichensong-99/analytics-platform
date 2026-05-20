@@ -1,0 +1,5 @@
+﻿# Generated reconciliation inputs (re-derivable from SQL queries)
+data/
+
+# Generated reconciliation outputs (re-derivable from run_reconciliation.py)
+reports/
