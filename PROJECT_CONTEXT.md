@@ -213,6 +213,43 @@
   - ✅ Forward-looking design 让切片 4+ 实现 ROAS 时变成一行 SQL
   - ✅ 避免过度设计,只保留有明确用途的 flag
 - **关键词**:Forward-Looking Dimension Flags / Pre-encoded Business Taxonomy / One-Line Metric Implementation
+
+### Decision 17:`fact_orders_line` 时区采用 DST-aware `from_utc_timestamp('America/New_York')`
+- **日期**:2026-05-19
+- **背景**:Panoply legacy 一直用固定的 `processed_at - 5h`(EST,UTC-5)做时区转换。但 32 Degrees 在纽约,实际时区是 `America/New_York` — 冬季 EST(UTC-5)、夏季 EDT(UTC-4),每年两次 DST 切换。Legacy 在 EDT 期间有 ~1% 系统性偏差(夏季跨午夜订单被误归到前一天)。
+- **结论**:新平台采用 Spark 内置 `from_utc_timestamp(processed_at, 'America/New_York')`,自动处理 DST。
+- **Trade-off**:
+  - ✅ 严格正确,跟纽约本地用户认知一致
+  - ✅ **修正 legacy 系统的工程缺陷**,作为新平台的质量提升点
+  - ✅ 简历讲故事素材:"identified and corrected legacy timezone bug"
+  - ⚠️ Day 5 reconciliation 时夏令时切换日附近(2025-11-02 / 2026-03-09 附近 UTC 晚间小时)跟 legacy 会有 < 1% 微差异 — 已在 design doc §8.7 文档化为"intentional correction"
+- **关键词**:DST-aware Timezone / Legacy Bug Correction / Engineering Quality Improvement
+
+### Decision 18:DQ 框架采用 Multi-tier SLO(PASS / WARN / FAIL),阈值基于实际 baseline 校准
+- **日期**:2026-05-19
+- **背景**:DQ 初稿用单层阈值(0.1% channel unmatched 报 warning)。Review 时发现这个阈值比实际健康基线还严格 — TW ↔ Shopify 实际 match rate 99.85%,即 baseline unmatched = 0.15%,0.1% 阈值会 100% 触发告警,造成告警疲劳。
+- **结论**:采用 SRE-style 多层 SLO 设计:
+  - **PASS**(默默通过):channel < 0.5% / product < 1%
+  - **WARN**(告警,pipeline 继续):channel 0.5%-2% / product 1%-5%
+  - **FAIL**(中止 pipeline):channel ≥ 2% / product ≥ 5%
+  - 阈值基于实际 baseline(0.15%)校准:WARN ~3x baseline 缓冲,FAIL ~14x baseline
+- **Trade-off**:
+  - ✅ 避免告警疲劳(WARN 阈值给正常波动留 3x 缓冲)
+  - ✅ 区分"操作信号"(WARN,记录到 DQ 报告)vs "数据完整性破坏"(FAIL,立即停)
+  - ✅ 阈值有数据支撑,不是拍脑袋
+  - ✅ 简历金句:"Multi-tier DQ SLO calibrated against empirical healthy baseline"
+- **关键词**:Multi-tier SLO / Empirical Calibration / Alert Fatigue Mitigation / SRE-style Observability
+
+### Decision 19:ERS 上游 schema 演进 — 采用双格式 schema-detection 自动识别
+- **日期**:2026-05-19
+- **背景**:ERS 月度上传 CSV,2026 年改了格式:`Unique_Identifier` → `SKU`,`Vend_ID` → `Style#`,`Item_Description` → `Item Description`(带空格),并新增 Geodis 物流 / Ladder 预测等列。如果只支持新格式,以后想重跑历史月份就要先手动转换。
+- **结论**:ETL 自动检测 ERS schema 版本(legacy / current),内部规范化到统一字段名(`sku`, `vend_id`, `item_description`, `season`, `group_name`, `gender`, `class_name`)。
+- **Trade-off**:
+  - ✅ 历史月份的旧格式 CSV 可以无修改直接重跑
+  - ✅ schema evolution tolerance — 跟之前 Panoply 老 tags / 新 metafield 双路径并行是**同一套工程思维**的延续
+  - ✅ 简历金句:"Built schema-evolution-tolerant ingest detecting and normalizing two distinct source schema versions"
+  - ❌ 代码复杂度略增(增加 detect_and_normalize_ers 函数),但收益明显大于成本
+- **关键词**:Schema Evolution Tolerance / Ingest Robustness / Backward Compatibility
 ---
 
 ## 6. 项目仓库
@@ -244,3 +281,37 @@ analytics-platform/
 - **回国时间**:待定(根据春招/秋招节奏)
 - **简历核心叙事**:
   > "主导设计并落地端到端数据平台,从多源数据接入到 Lakehouse 数仓建模、指标服务化、自助分析门户,配套调度、数据质量、流处理等平台能力,替代 Power BI Service 节省 $X/年。"
+
+  ---
+
+## 8. Remaining Tasks Tracker(2026-05-19 起)
+
+### P0 任务(Day 2-5 之前必做)
+
+- [ ] **Task E**:YAML 指标定义 `quantity_by_style_channel_week.yaml` (~1h)
+- [ ] **Task F**:Next.js mock UI for `Style-channel (quantity)` page (~3-4h)
+- [ ] **Task G**:DQ YAML 配置(用 Track 3 框架,4 张表)(~1h)
+
+### H 加分项(独立,完成 P0 后做)
+
+- [ ] **H2**:Reconciliation methodology 脚本 + Excel 模板 (~2h)
+- [ ] **H3**:补 `existing_data_inventory.md` §5.2-5.N PBI 页映射 (~4-6h,分多次)
+- [x] **H5**:Decision Log 17/18/19 ✅ 2026-05-19
+- [ ] **H6**:Demo script(Task F 完成后做)(~1.5h)
+
+### 阻塞中(等同事开 `mvdevdatabricks.analytics_platform_32degrees` schema)
+
+- [ ] **Day 2**:Dim ETL — 跑 notebook 01/02/03(~半天)
+- [ ] **Day 3**:Fact ETL — 跑 notebook 04(~1 天)
+- [ ] **Day 4**:FastAPI 真连 Databricks SQL Warehouse(~半天)
+- [ ] **Day 5**:Next.js wire-up + DQ + Reconciliation + Leader Demo(~1 天)
+
+### 后期 Phase(已锁定的项目路线图)
+
+- [ ] Slice 2: revenue page(复用 Slice 1 基础)
+- [ ] Slice 3: refunds page
+- [ ] Slice 4: ROAS page(加 fact_attribution_touchpoint)
+- [ ] Phase 4: Workflows 调度 + DQ 落地
+- [ ] **Phase 4.5 ⭐**: Streaming 实时模块(简历核心)
+- [ ] Phase 5: Redis + Metrics Catalog + Lineage
+- [ ] Phase 6: 部署 + 文档 + 成本核算
