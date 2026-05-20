@@ -1,0 +1,230 @@
+# Reconciliation Methodology — Slice 1
+
+> **Purpose**: Quantitative trust gate for the new analytics platform's Slice 1
+> against the legacy Panoply system. Day 5 of the slice build, before Leader demo.
+
+---
+
+## Why this exists
+
+Slice 1 migrates the `Style-channel (quantity)` PBI page from a legacy Panoply-backed
+data path to the new Databricks Lakehouse platform. Both systems compute the same
+business question — "how many units sold per style × channel × week" — but through
+entirely different pipelines:
+
+| Aspect | Legacy Panoply | New Platform |
+|---|---|---|
+| Source data | Shopify (Panoply auto-sync) + GA4 + ERS | Shopify (Fivetran) + Triple Whale + ERS |
+| Channel attribution | GA4 `channelgrouping` | TW `channel_source` with `legacy_channel_group` mapping |
+| Timezone | Static UTC-5 (DST-ignorant) | DST-aware `from_utc_timestamp('America/New_York')` |
+| Date semantics | Mixed (PBI-derived US-week + Panoply native week) | ISO 8601 only (Decision 11) |
+| Engine | Redshift (Panoply) | Spark SQL (Databricks) |
+
+Differences are expected. The goal is to **quantify** them, distinguish "expected
+< 2% diff" from "concerning drift", and surface results in a Leader-readable format.
+
+---
+
+## What this directory contains
+
+```
+docs/reconciliation/
+├── README.md                           # this file
+├── 01_new_platform_query.sql           # query against Databricks fact_orders_line
+├── 02_panoply_legacy_query.sql         # query against Panoply Style_selling_dfNEW
+├── run_reconciliation.py               # Python diff + report generator
+├── data/                               # (gitignored) CSV inputs
+│   ├── new_platform.csv                # output of query 1
+│   └── panoply_legacy.csv              # output of query 2
+└── reports/                            # (gitignored) generated reports
+    ├── reconciliation_report.xlsx      # Leader-facing color-coded Excel
+    ├── reconciliation_diff.csv         # machine-readable full diff
+    └── reconciliation_summary.json     # overall stats
+```
+
+---
+
+## Reconciliation grain
+
+`(iso_year × iso_week × vend_id × legacy_channel_group)`
+
+**Why this grain**:
+
+- **Week-level** — daily reconciliation has too much noise from order-arrival timing;
+  weekly aggregates smooth that out while still being granular enough to spot drift.
+- **vend_id** (style) — the central business dimension; differences at the style level
+  are actionable for merchandisers.
+- **legacy_channel_group**, not `channel_source` — the new platform's `dim_channel`
+  exposes both a TW-native name (`channel_source` like `google-ads`) and a GA4-style
+  grouping (`legacy_channel_group` like `Paid Search`, Decision 15). For reconciliation
+  we use `legacy_channel_group` because that's what Panoply has, enabling 1:1
+  comparison.
+
+---
+
+## Default time window
+
+**Last 7 complete days** (yesterday going back 7 days, today excluded).
+
+**Why 7 days**:
+
+- Covers a full week → every channel that has any traffic appears
+- Excludes today because Fivetran daily sync may not have completed
+- Small enough that the resulting Excel is scannable (typically 200-1000 rows)
+- Recent enough that channel mapping ambiguities are minimized (TW data is most
+  complete and well-mapped in recent windows)
+
+To run a different window, edit the `WHERE` clauses in both SQL files.
+
+---
+
+## Thresholds & status categories
+
+| Category | Definition | Color | Action |
+|---|---|---|---|
+| **PASS** | `\|diff%\|` < 2% | 🟢 green | None — within expected variance |
+| **WARN** | 2% ≤ `\|diff%\|` < 5% | 🟡 yellow | Note in demo; spot-check causes |
+| **FAIL** | `\|diff%\|` ≥ 5% | 🔴 red | Investigate; explain or fix before Leader sees |
+| **MISSING_NEW** | new=0, panoply > 10 units | 🟠 orange | Likely TW didn't tag this bucket — investigate channel mapping |
+| **MISSING_PANOPLY** | new > 10 units, panoply=0 | 🟠 orange | Likely new platform is picking up data legacy missed — verify and document |
+
+### Why these thresholds (independent of ETL DQ thresholds)
+
+The thresholds here are **wider than the ETL DQ thresholds in `notebook 04`** because
+reconciliation has more legitimate sources of variance:
+
+| Variance source | Direction | Expected magnitude |
+|---|---|---|
+| GA4 → TW channel mapping (e.g., GA4 "Paid Search" ≈ TW "google-ads" + "bing-ads" combined) | bidirectional | < 5% per bucket |
+| DST-aware vs static -5h timezone | DST transition days only | < 1% on non-transition days, up to 5% on the 2 transition days per year |
+| TW attribution recency (we use last_touch; legacy GA4 was last-click) | usually agrees | < 2% |
+| Refund/replacement exclusion (legacy strips them; new keeps them with flags — Decision in inventory §5.1.7 Q B, may flip per Leader) | systematic skew | < 3% expected |
+
+Summed in the worst case, ~10% variance can be entirely "expected." Anything above
+that signals real drift worth investigating.
+
+---
+
+## How to run
+
+### Prerequisites
+
+```powershell
+# From project root
+pip install pandas openpyxl
+```
+
+### Step-by-step
+
+**Step 1**: Run new-platform query.
+
+1. Open Databricks SQL Editor in your workspace
+2. Open `docs/reconciliation/01_new_platform_query.sql`
+3. Copy-paste, run
+4. Download result as CSV
+5. Save to `docs/reconciliation/data/new_platform.csv`
+
+**Step 2**: Run Panoply legacy query.
+
+1. Open Panoply Web UI → SQL Editor
+2. Open `docs/reconciliation/02_panoply_legacy_query.sql`
+3. Copy-paste, run
+4. Export result as CSV
+5. Save to `docs/reconciliation/data/panoply_legacy.csv`
+
+**Step 3**: Run the Python diff script.
+
+```powershell
+cd C:\Users\sia.song\analytics-platform
+python docs/reconciliation/run_reconciliation.py
+```
+
+You'll see a console summary, and three files appear in `docs/reconciliation/reports/`:
+
+- `reconciliation_report.xlsx` — Leader-facing, color-coded
+- `reconciliation_diff.csv` — machine-readable, all rows
+- `reconciliation_summary.json` — overall stats for dashboards / scripts
+
+### Interpreting the report
+
+The Excel has three sheets:
+
+1. **Summary** — top-level stats; this is what Leader sees first
+2. **All_Rows** — every reconciliation bucket, color-coded
+3. **Needs_Attention** — only FAIL / MISSING rows, sorted by severity
+
+**Success criterion for Slice 1 demo** (from design doc §1.3):
+
+> 95% of (iso_week × vend_id × legacy_channel_group) buckets have `\|pct_diff\|` < 2%.
+
+If summary shows `PASS%` ≥ 95%, demo is green-lit. Below that, walk through
+the `Needs_Attention` sheet and prepare explanations for each red row.
+
+---
+
+## Demo talking points (when showing this to Leader)
+
+Use this structure during Day 5 demo:
+
+1. **Open Summary sheet first.** Show the % breakdown.
+   - "X% of buckets pass within 2% — this is our trust gate for migration."
+
+2. **Show overall qty totals.** Single number is intuitive.
+   - "Total units last 7 days: legacy says A, new says B, diff is Z%."
+
+3. **If anything is in WARN/FAIL/MISSING**, pre-explain the most likely causes:
+   - WARN clusters in non-paid channels → channel taxonomy translation (expected)
+   - MISSING_NEW on a channel → that channel may need TW seeding (action item)
+   - MISSING_PANOPLY on a channel → new platform catches what legacy missed (improvement)
+
+4. **Don't open the All_Rows sheet** unless asked — it's too much detail for a
+   first demo. Keep it as backup for follow-up questions.
+
+---
+
+## Maintenance
+
+This is not a one-time exercise. The reconciliation script is designed to be
+re-run periodically during the migration period to detect drift:
+
+- **Day 5**: First run, slice 1 launch
+- **Week 2 post-launch**: Re-run to ensure stability
+- **Monthly during migration**: Periodic sanity check
+- **On any Decision change** (e.g., refund flag flip): Re-run to capture impact
+
+When slice 2 (revenue) ships, this same methodology applies — just swap `SUM(quantity)`
+for `SUM(line_price - total_discount)` in both SQL files.
+
+---
+
+## Engineering principles applied
+
+- **Test in production through the front door**: rather than unit-testing the new
+  ETL in isolation, validate end-to-end against the system it replaces.
+- **Quantify, don't claim**: "correct migration" is meaningless without numbers;
+  this report turns it into a measurable, reviewable artifact.
+- **Single source of truth for thresholds**: the thresholds live in `run_reconciliation.py`
+  and are reflected in the report, so Leader and engineer see the same definitions.
+- **Designed for re-run**: the script reads CSVs (not live connections), so the same
+  data can be re-analyzed with different thresholds without re-querying source systems.
+
+---
+
+## Resume notes (for Sia)
+
+This reconciliation framework contributes the following resume points:
+
+1. **"Authored quantitative reconciliation methodology comparing new Lakehouse
+   platform vs legacy Panoply system at (iso_week × style × channel) grain, with
+   explicit < 2% diff threshold as the migration trust gate."**
+
+2. **"Built repeatable reconciliation tooling (SQL + Python + Excel) that can be
+   re-run on demand during and after migration to detect drift."**
+
+3. **"Designed Leader-facing diff visualization with PASS/WARN/FAIL/MISSING color
+   coding for at-a-glance trust assessment, separating expected variance (channel
+   taxonomy translation, DST correction) from real drift."**
+
+4. **"Established that 95% of reconciliation buckets within 2% diff was the
+   migration-acceptance threshold, calibrated against four identified sources of
+   legitimate variance (channel mapping, DST, attribution model, refund handling)."**
