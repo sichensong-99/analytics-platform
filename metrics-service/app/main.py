@@ -5,7 +5,7 @@ Provides RESTful endpoints for querying business metrics.
 """
 
 from datetime import date
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,11 +22,10 @@ from app.metrics_loader import get_metric, list_metrics
 app = FastAPI(
     title="Internal Metrics Service",
     description="Unified metrics API backed by YAML-driven metric layer.",
-    version="0.1.0",
+    version="0.2.0",
 )
 
 
-# Allow Next.js frontend (running on localhost:3000) to call this API
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000"],
@@ -36,7 +35,7 @@ app.add_middleware(
 )
 
 
-# ============ OpenAPI Bearer auth (makes "Authorize" button appear) ============
+# ============ OpenAPI Bearer auth ============
 
 def custom_openapi():
     if app.openapi_schema:
@@ -86,6 +85,28 @@ class MetricResponse(BaseModel):
     data: list[dict]
 
 
+# ============ Helpers ============
+
+def _serialize_params(params: dict[str, Any]) -> dict[str, Any]:
+    """
+    Serialize params for JSON response.
+    - date -> ISO string
+    - None -> dropped
+    - list -> kept as list
+    """
+    out: dict[str, Any] = {}
+    for k, v in params.items():
+        if v is None:
+            continue
+        if isinstance(v, date):
+            out[k] = v.isoformat()
+        elif isinstance(v, list):
+            out[k] = v
+        else:
+            out[k] = str(v)
+    return out
+
+
 # ============ Health check (no auth) ============
 
 @app.get("/health")
@@ -98,9 +119,7 @@ def health_check():
 
 @app.get("/metrics", response_model=list[MetricSummary])
 def list_all_metrics(user: UserPayload = Depends(get_current_user)):
-    """
-    Return summary info for all metrics — the metrics catalog.
-    """
+    """Return summary info for all metrics — the metrics catalog."""
     return list_metrics()
 
 
@@ -109,13 +128,25 @@ def query_metric(
     metric_id: str,
     start_date: date = Query(..., description="Start date (inclusive)"),
     end_date: date = Query(..., description="End date (inclusive)"),
+    # === Generic optional dimensional filters ===
+    # Repeat parameter to send multiple values, e.g.:
+    #   ?channels=google-ads&channels=meta&seasons=F23
+    channels: Optional[list[str]] = Query(
+        None, description="Filter by channel_source (TW). Repeat to pass multiple."
+    ),
+    seasons: Optional[list[str]] = Query(
+        None, description="Filter by ERS season. Repeat to pass multiple."
+    ),
+    styles: Optional[list[str]] = Query(
+        None, description="Filter by ERS vend_id (style). Repeat to pass multiple."
+    ),
     user: UserPayload = Depends(get_current_user),
 ):
     """
-    Query a metric by ID over a date range.
+    Query a metric by ID over a date range, with optional dimensional filters.
 
-    The SQL template is rendered with the given params, then executed
-    against the data warehouse (currently mocked).
+    Backward-compatible: existing metrics that don't declare these filters
+    receive them as no-ops (mock client ignores; real SQL guard via `:x IS NULL` pattern).
     """
     metric = get_metric(metric_id)
     if metric is None:
@@ -124,19 +155,20 @@ def query_metric(
             detail=f"Metric '{metric_id}' not found",
         )
 
-    # Validate date range
     if end_date < start_date:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="end_date must be >= start_date",
         )
 
-    params = {
+    params: dict[str, Any] = {
         "start_date": start_date,
         "end_date": end_date,
+        "channels": channels,
+        "seasons": seasons,
+        "styles": styles,
     }
 
-    # Run the query (mock in Phase 2A)
     rows = run_query(metric["sql"], params)
 
     return MetricResponse(
@@ -144,6 +176,6 @@ def query_metric(
         name=metric["name"],
         version=metric["version"],
         unit=metric["unit"],
-        params={k: v.isoformat() for k, v in params.items()},
+        params=_serialize_params(params),
         data=rows,
     )

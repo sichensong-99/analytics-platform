@@ -333,7 +333,293 @@ ORDER BY position;
 
 ## 5. PBI Dashboard → 新数据源映射
 
-> 🚧 待完成 — Step 4 补全
+> **目的**:把现有 PBI report 每个 page 上的每个 visual 反向工程出来,作为新平台数仓建模与指标定义的需求圣经。
+>
+> **方法**:每个 page 走"全景 → visual 详解 → 数据来源追溯 → 关键洞察 → 新平台对应方案"五段式。
+
+---
+
+## 5.1 Page: `Style-channel (quantity)`
+
+> **PBI 位置**:Style-Channel report 的第 2 个 tab(共 20+ tabs)
+> **服务对象**:Ecom 全团队(buyer / marketing / merchandiser)— 同一份 fact 服务多角色
+> **核心业务问题**:每个 style 在每个营销渠道、每周卖了多少件?
+> **数据源**:`Style_selling_df`(Panoply 上叫 `Style_selling_dfNEW`,行级 fact)
+> **完成日期**:2026-05-18
+
+---
+
+### 5.1.1 Page 全景
+
+整个 page 由 4 个核心元素构成,设计极其简洁:
+
+| # | 元素 | 类型 | 作用 |
+|---|---|---|---|
+| 1 | 顶部时间滑块(Y/W/D 三粒度切换,2016–2025)| Numeric range slicer | 控制时间窗口 + 时间粒度 |
+| 2 | 左侧 slicer panel:`channel` / `season` / `style` | 3 个 Slicer | 维度过滤 |
+| 3 | 中间折线图 | Line chart | channel × week 销量趋势 |
+| 4 | 右侧矩阵表 | Matrix table with drilldown | style × channel × item × week 销量明细 |
+
+**Page 设计哲学**:折线图(macro view,看趋势)+ 矩阵表(drill-down view,看明细)的经典组合。左侧 slicer 与顶部时间滑块**联动控制**两个 visual。
+
+---
+
+### 5.1.2 Visual 详解
+
+#### Visual 1 — 顶部时间滑块(Date Range Slider)
+
+| 项目 | 详情 |
+|---|---|
+| **类型** | Numeric range slicer with Y/W/D hierarchy toggle |
+| **绑定字段** | `Style_selling_df.day`(单一字段)|
+| **当前选择** | 2023–2024 |
+| **粒度切换** | Y(年)/ W(周)/ D(日)三键,**由 PBI 自动从 `day` 派生** year/week 层级 |
+| **作用范围** | Page 上**所有** visuals 联动 |
+
+#### Visual 2 — 左侧 Slicer Panel
+
+| Slicer | 绑定字段 | 选项数量 | 备注 |
+|---|---|---|---|
+| **channel** | `Style_selling_df.channelgrouping` | 11+ | GA4 channel grouping(Affiliates / Email / Paid Search / Organic Search / ...)|
+| **season** | `Style_selling_df.season` | ~10+ | 来自 ERS 产品主数据(BAS / BAS-DIS / F22 / F23 / ...)|
+| **style** | `Style_selling_df.style`(对应 ERS `vend_id`)| 数百 | 含搜索框 |
+
+> ✅ **隐式过滤器审计**:Page-level filter 里无隐式过滤,所有过滤都通过显式 slicer 完成。新平台保留这个设计原则 — 杜绝"暗箱过滤"。
+
+#### Visual 3 — 中间折线图(Line Chart)
+
+| 项目 | 详情 |
+|---|---|
+| **图表类型** | Multi-line chart |
+| **X 轴** | `year` + `week`(PBI 自动从 `day` 派生的 hierarchy)|
+| **Y 轴** | `SUM(quantity)` |
+| **Legend** | `channelgrouping`(每个 channel 一条线)|
+| **数据标签** | 显示每个 channel 在每周的具体数字(e.g. `Email 70,297`)|
+
+**业务问题**:"上周 / 本季各渠道卖了多少件?Email 涨势如何?Paid Search 是否在掉?"
+
+**主要使用者**:**Marketing** — 判断各渠道周度表现,评估投放效果
+
+**支撑的具体决策**:
+- "Email 渠道周销下滑 → 检查最近 EDM 投放频率"
+- "Affiliates 突然飙升 → 看是哪个合作方在推"
+- "Paid Search 周度抖动大 → 看预算配置是否有问题"
+
+#### Visual 4 — 右侧矩阵表(Matrix)
+
+| 项目 | 详情 |
+|---|---|
+| **图表类型** | Matrix with 3-level hierarchical drilldown |
+| **Rows(下钻 3 层)** | `style` (UI label `style (week)`) → `channelgrouping` → `Item_description` |
+| **Columns** | `year` + `week`(**用 Panoply 表原生 `year` / `week` 字段**,不是 PBI 派生)|
+| **Values** | `SUM(quantity)` |
+
+**业务问题**:"PACKBAG / SILVERTOTE / T3FK1451PRT 这几个 style,这几周在各渠道分别卖了多少件?对应 SKU 是哪些?"
+
+**主要使用者**:
+- **Buyer**:看 style × week 销量趋势 → 决定补货 SKU 与数量
+- **Merchandiser**:看 style × channel 交叉 → 决定哪些 style 在哪个 channel 推
+- **Marketing**:从 Item_description 层下钻 → 看具体 SKU 在哪个 channel 表现好
+
+⭐ **关键工程细节**:
+- 表里的 `year` / `week` 列来自 **Panoply 表本身的字段**(不是 PBI 派生)
+- 这意味着 Panoply 上游已经把 `day → year + week` 物化到表里
+- 顶部时间滑块用 `day` + PBI 自动派生 vs 表格用 Panoply 原生 `year/week`,这是**两套时间系统并行**
+- 边界周(跨年周如 2023-W52)两套系统的口径可能不一致 — 详见 §5.1.4 洞察 #2
+
+---
+
+### 5.1.3 数据源追溯
+
+整个 page 的所有字段 100% 来自 **同一张表**:`Style_selling_df`(行级 fact)。
+
+字段血缘(参考 `legacy_panoply_etl.md` §2.4):
+
+| Style_selling_df 字段 | 上游来源 | 关键 join 逻辑 |
+|---|---|---|
+| `day` / `year` / `week` | Shopify `order.processed_at`(UTC → EST 时区转换)| `processed_at - 5h` |
+| `channelgrouping` | GA4 `ga4_test`(归因)| **transactionId 三路兜底 join**:`checkout_id` / `order.id` / `order.name` |
+| `quantity` | Shopify `order_line_items.quantity` | 行级粒度 |
+| `style` (vend_id) | ERS `mysql_ers.vend_id` | **SKU 主键 + item_description 兜底**双路降级匹配 |
+| `Item_description` | ERS `mysql_ers.item_description` | 同上 |
+| `season` | ERS `mysql_ers.season` | 同上 |
+
+**结论**:这一个 page 用了销售归因 pipeline 的**全部 join 链** — 包括 §2.3 的两个核心 trick(GA4 三路兜底 + ERS 双路降级)。这两个 trick 是简历金句的核心素材。
+
+---
+
+### 5.1.4 ⭐ 关键洞察(简历价值)
+
+#### 洞察 #1:Conformed Fact 服务多角色 — Kimball 维度建模的活样本
+
+**现象**:同一个 fact(`Style_selling_df`),通过不同 slicer + 不同视角,服务 buyer / marketing / merchandiser 三种完全不同的决策场景。
+
+**意义**:这正是 Kimball "conformed fact + 多种 query pattern" 的教科书案例 — 不为不同角色做"专表",而是一个 fact 通过维度切片满足所有需求。
+
+**新平台策略**:
+- 行级 fact `dwd.fact_orders_line` 保持单一定义
+- 不做角色专表(避免数据冗余 + 口径漂移)
+- DWS 层针对热点查询做预聚合(`dws.style_channel_weekly`),但底层一致
+
+> ⭐ **简历金句**:"Validated Kimball's conformed fact principle in legacy system reverse engineering — identified a single fact table serving buyer / marketing / merchandiser personas via dimensional slicing, informing the single-fact-multi-grain design of the new platform."
+
+#### 洞察 #2:BI 工具派生时间层级 vs 数据源原生时间字段 — 口径不一致风险
+
+**现象**:同一个 page 上,**顶部时间滑块用 PBI 自动派生的 year/week**(从 `day` 字段派生),**右边矩阵表用 Panoply 原生 `year`/`week` 字段**(上游 ETL 计算的)。
+
+**风险**:
+- 跨年周(e.g. 2023-12-31 这周横跨 2023 / 2024)PBI 自动派生 vs Panoply 计算可能用不同的"周首日"规则(Sunday vs Monday)、不同的"年第几周"算法(ISO 8601 vs Excel WEEKNUM)
+- 同一个用户在同一个 page 上看到的数字可能因为筛选路径不同而对不上 — 经典的"两套口径"问题
+
+**新平台解决方案**:
+- 用统一的 `dim_date`(单一 source of truth)
+- 在 dim 表里固化 `iso_year` / `iso_week` 字段
+- 所有时间维度查询都走 dim,杜绝 BI 工具派生
+
+> ⭐ **简历金句**:"Identified a latent risk in legacy BI report where tool-derived date hierarchy and source-system-precomputed date fields could disagree on boundary weeks; resolved by introducing a unified `dim_date` conformed dimension in the new Lakehouse model, eliminating cross-system date semantic drift."
+
+#### 洞察 #3:行级粒度的不可替代性
+
+**现象**:这个 page 需要从 style 层下钻到 Item_description(SKU 级)的销量明细。
+
+**意义**:证明 fact 必须是**行级粒度**,不能用订单级 fact 替代 — 验证了 `legacy_panoply_etl.md §2.3 解法 #4`(双粒度并行建模)的设计正确性。
+
+**新平台策略**:保留 `dwd.fact_orders_line`(行级 fact),不能用 `dwd.fact_orders` 替代这个 page 的需求。
+
+---
+
+### 5.1.5 新平台对应方案
+
+#### Fact / Dim 字段映射
+
+| 旧(Panoply `Style_selling_df`)| 新(Databricks Lakehouse)| 类型 | 备注 |
+|---|---|---|---|
+| `day` | `dim_date.date_key` | conformed dim | 通过 fact 表的 date_key 关联 |
+| `year` / `week` | `dim_date.iso_year` / `dim_date.iso_week` | conformed dim | 统一 ISO 8601,不在 fact 表重复 |
+| `channelgrouping` | `dim_channel.channel_name` | conformed dim | **数据源从 GA4 迁移到 TW**,见 §5.1.6 |
+| `quantity` | `dwd.fact_orders_line.quantity` | fact measure | 行级 |
+| `style` | `dim_product.vend_id` | conformed dim | SCD2 管理 |
+| `Item_description` | `dim_product.item_description` | conformed dim | SCD2 管理 |
+| `season` | `dim_product.season` | conformed dim | SCD2 管理 |
+
+#### 物理查询路径
+
+```
+Web Portal (Next.js)
+    ↓ 调用
+FastAPI Metrics Service
+    ↓ 加载 YAML 指标定义
+Metric Layer (YAML DSL)
+    ↓ 生成 SQL
+Databricks SQL Warehouse
+    ↓ 执行
+SELECT
+    d.iso_year, d.iso_week,
+    p.vend_id, p.item_description,
+    c.channel_name,
+    SUM(f.quantity) AS quantity
+FROM dwd.fact_orders_line f
+JOIN dim_date d ON f.date_key = d.date_key
+JOIN dim_product p ON f.product_key = p.product_key
+JOIN dim_channel c ON f.channel_key = c.channel_key
+WHERE d.date_key BETWEEN ? AND ?
+  AND c.channel_name IN (?)
+  AND p.season IN (?)
+  AND p.vend_id IN (?)
+GROUP BY 1,2,3,4,5
+```
+
+#### 待加入 metric_layer 的 YAML 指标
+
+```yaml
+# metrics/quantity_by_style_channel_week.yaml
+name: quantity_by_style_channel_week
+version: 1
+description: "按 style × channel × week 维度的销量(件数),支持 PBI Style-channel (quantity) page"
+unit: count
+grain:
+  - iso_year
+  - iso_week
+  - vend_id
+  - channel_name
+optional_dims:
+  - item_description
+  - season
+source_fact: dwd.fact_orders_line
+measure: SUM(quantity)
+filters:
+  required:
+    - date_range
+  optional:
+    - channel_name
+    - season
+    - vend_id
+owner: sia
+changelog:
+  - v1 (2026-05-18): Initial definition, migrated from PBI Style_selling_df
+```
+
+---
+
+### 5.1.6 Channel 口径迁移影响(GA4 → TW)
+
+⚠️ **这是 page 迁移的最大变量**。原 page 的 `channelgrouping` 来自 GA4,新平台改用 TW。
+
+**初步对照表**(待 Leader + Cal 对齐):
+
+| GA4 channel(旧)| TW channel(新)| 含义 |
+|---|---|---|
+| Email | `klaviyo` / `attentive` | 邮件 / SMS 营销 |
+| Paid Search | `google-ads` | 付费搜索 |
+| Organic Search | `direct` 或 `organic_and_social` | 自然搜索(TW 无独立分类)|
+| Paid Social | `meta` | 付费社交 |
+| Affiliates | `impact` | 联盟营销 |
+| Direct / None | `direct` | 直接流量 |
+| Cross-network | (TW 无对应)| GA4 特有 |
+| Organic Video | `bing` / `organic_and_social` | 自然视频 |
+
+🚩 **关键约束**:TW channel 数据**仅从 2025-09 起完整**。2023-07 至 2025-08 这段历史只有 GA4 channel 数据(注意:GA4 数据本身在 2023-07-01 起完整,所以历史是 GA4 → 2025-08,TW 是 2025-09 起)。
+
+**新平台解决方案**(已在 `legacy_panoply_etl.md §10 决策 #3` 锁定):
+- 提供**双口径映射表**,在 portal 可切换
+- 默认 TW channel(更结构化、与广告投放对齐)
+- 历史段(2025-08 前)兜底用 GA4 channel
+- 在 `dim_channel` 表里同时保留 `tw_channel_name` 和 `ga4_channel_name`,FastAPI 服务层按用户选择切换
+
+> ⭐ **简历金句**:"Architected a dual-taxonomy channel dimension to handle attribution platform migration (GA4 → Triple Whale) with non-overlapping data windows, preserving historical analytical continuity while migrating to the new platform-based channel grouping."
+
+---
+
+### 5.1.7 待 Leader 对齐的口径决策
+
+收集到 §10 待对齐清单(等 §5 全部完成后一次性问 Leader):
+
+| # | 决策点 | Sia 建议 |
+|---|---|---|
+| A | Channel 口径迁移过渡方案(参见 §5.1.6)| 双口径并行,默认 TW |
+| B | "Quantity" 是否要排除 refund / replacement?(旧 `Style_selling_df` 已经在 `shopify_orders_order2` 阶段排除了)| 新平台**保留全部订单**,加 `is_refunded` / `is_replaced` flag,前端默认显示 net quantity,可切换看 gross |
+| C | Page 是否扩展到月度 / 季度粒度?| 是 — 用 `dim_date` 后零成本支持 |
+
+---
+
+### 5.1.8 §5.1 完成检查清单
+
+- [x] 识别全部 4 个 visual
+- [x] 确认数据来源 100% 来自 `Style_selling_df`
+- [x] 隐式过滤器审计(无)
+- [x] 3 个简历级洞察(conformed fact / 时间口径风险 / 行级粒度必要性)
+- [x] 完整的旧 → 新字段映射表
+- [x] 物理查询路径示例
+- [x] YAML 指标定义草稿
+- [x] Channel 口径迁移影响分析
+- [x] 收集口径决策点,待 §5 全部完成后找 Leader 对齐
+
+---
+
+## 5.2 Page: (TBD - 下一个)
+
+(待补充)
+
 
 ---
 

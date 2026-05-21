@@ -20,6 +20,16 @@ Databricks Workflows + Data Quality Framework
 ```
 
 ---
+## Modules
+
+### Data Quality Framework (`metrics-service/data_quality/`)
+
+YAML-driven data quality validation framework. Supports `not_null`, `unique`, 
+`range`, and `freshness` checks. Designed as a quality gate for the warehouse 
+pipeline. See [data_quality/README.md](metrics-service/data_quality/README.md).
+
+
+---
 
 ## Repository Structure
 

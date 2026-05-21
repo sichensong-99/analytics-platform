@@ -1,177 +1,69 @@
-# Databricks notebook source
-# MAGIC %md
-# MAGIC # Slice 1 — Notebook 02: Seed `dim_channel`
-# MAGIC
-# MAGIC **Purpose**: Populate the `dim_channel` table from the version-controlled seed SQL file.
-# MAGIC
-# MAGIC **Why seed-driven**: `dim_channel` is small (~16 rows) and content-controlled (channel
-# MAGIC taxonomy is a business-decision artifact, not raw data). Keeping the seed in a SQL file
-# MAGIC under version control gives auditability (who changed which channel and when).
-# MAGIC
-# MAGIC **Input**: `docs/data_modeling/dim_channel_seed.sql` (committed in git repo)
-# MAGIC
-# MAGIC **Output**: `mvdevdatabricks.analytics_platform_32degrees.dim_channel`
-# MAGIC
-# MAGIC **Idempotent**: Yes — seed SQL is `TRUNCATE + INSERT`.
-# MAGIC
-# MAGIC **Note**: For Phase 4 Workflows orchestration, this notebook will be triggered by a
-# MAGIC job task that mounts the repo (Databricks Repos) so the SQL file is accessible at a
-# MAGIC stable path. For slice 1 manual runs, paste the seed SQL inline if Repos mount is not
-# MAGIC yet configured (see §3 fallback).
-# MAGIC
-# MAGIC **Author**: Sia Song
-# MAGIC **Created**: 2026-05-19
+# Databricks notebook — 02_seed_dim_channel
+# Slice 1 · dim_channel
+# v2.0 (2026-05-21):
+#   - 全量重建:种子值改用 attribution_order_click.source 的真实值
+#     (上一版用了 GUESSED 值 meta/klaviyo，是 notebook 04 channel DQ FAIL 的根因)
+#   - 改列名 legacy_channel_group -> channel_group (定位为 Kimball roll-up 层级)
+#   - channel_key = 0 固定保留给显式 'Unknown' 兜底成员
 
-# COMMAND ----------
+CATALOG = "mvdevdatabricks"
+SCHEMA  = "analytics_platform_32degrees"
+TABLE   = f"{CATALOG}.{SCHEMA}.dim_channel"
+print(f"Target: {TABLE}")
 
-# MAGIC %md
-# MAGIC ## 1. Configuration
+spark.sql(f"DROP TABLE IF EXISTS {TABLE}")
 
-# COMMAND ----------
-
-TARGET_CATALOG = "mvdevdatabricks"
-TARGET_SCHEMA = "analytics_platform_32degrees"
-TARGET_TABLE = "dim_channel"
-
-FULL_TARGET = f"{TARGET_CATALOG}.{TARGET_SCHEMA}.{TARGET_TABLE}"
-
-# Path to the seed SQL file once Databricks Repos is mounted.
-# Adjust to the actual mounted path in your workspace; placeholder shown:
-SEED_SQL_PATH = "/Workspace/Repos/sia.song/analytics-platform/docs/data_modeling/dim_channel_seed.sql"
-
-# Expected row count post-seed (sync with dim_channel_seed.sql contents)
-EXPECTED_ROW_COUNT = 16
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## 2. Read seed SQL
-# MAGIC
-# MAGIC **Primary path**: Read from mounted git repo.
-# MAGIC **Fallback**: If Repos not mounted, manually paste the seed SQL into the SEED_SQL_INLINE
-# MAGIC variable below and set USE_INLINE = True.
-
-# COMMAND ----------
-
-USE_INLINE = False  # Flip True if Repos mount is unavailable
-
-SEED_SQL_INLINE = """
--- PASTE CONTENTS OF dim_channel_seed.sql HERE IF USE_INLINE = True
--- (intentionally left empty; populate at runtime if needed)
-"""
-
-if USE_INLINE:
-    seed_sql = SEED_SQL_INLINE
-    print("[INFO] Using inline seed SQL")
-else:
-    with open(SEED_SQL_PATH, "r", encoding="utf-8") as f:
-        seed_sql = f.read()
-    print(f"[INFO] Loaded seed SQL from: {SEED_SQL_PATH}")
-    print(f"[INFO] Seed SQL length: {len(seed_sql)} chars")
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## 3. Execute seed SQL
-# MAGIC
-# MAGIC Split the file into individual statements on `;` and execute each via `spark.sql`.
-
-# COMMAND ----------
-
-# Strip SQL comments (lines starting with --) and empty lines, then split on ;
-def split_sql_statements(sql_text: str) -> list[str]:
-    """Naive SQL splitter: removes -- line comments, splits on ; , keeps non-empty."""
-    cleaned_lines = []
-    for line in sql_text.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("--") or stripped == "":
-            continue
-        cleaned_lines.append(line)
-    cleaned = "\n".join(cleaned_lines)
-    statements = [s.strip() for s in cleaned.split(";") if s.strip()]
-    return statements
-
-statements = split_sql_statements(seed_sql)
-print(f"[INFO] {len(statements)} SQL statements to execute")
-
-for i, stmt in enumerate(statements, start=1):
-    preview = stmt[:80].replace("\n", " ")
-    print(f"[INFO] Executing statement {i}/{len(statements)}: {preview}...")
-    spark.sql(stmt)
-
-print("[OK] All statements executed")
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## 4. Post-write validation
-
-# COMMAND ----------
-
-from pyspark.sql import functions as F
-
-written = spark.table(FULL_TARGET)
-written_count = written.count()
-print(f"[INFO] dim_channel row count: {written_count}")
-
-assert written_count == EXPECTED_ROW_COUNT, (
-    f"Row count mismatch: expected {EXPECTED_ROW_COUNT}, got {written_count}. "
-    f"Did you update EXPECTED_ROW_COUNT after editing the seed SQL?"
+spark.sql(f"""
+CREATE TABLE {TABLE} (
+  channel_key      INT       COMMENT 'Surrogate key. 0 = Unknown catch-all member.',
+  channel_source   STRING    COMMENT 'Triple Whale raw source value — matches TW portal exactly.',
+  channel_group    STRING    COMMENT 'Roll-up hierarchy level for executive-level aggregation (Paid Search / Paid Social / Email / ...).',
+  is_paid          BOOLEAN   COMMENT 'TRUE = paid advertising platform with media ad_spend (paid-media ROAS denominator).',
+  is_meta_category BOOLEAN   COMMENT 'TRUE = TW operational meta-category (Non-attributed / Excluded), not a real marketing channel.',
+  _seeded_at       TIMESTAMP COMMENT 'Seed load timestamp.'
 )
+USING DELTA
+COMMENT 'Slice 1 channel dimension. Seeded from triple_whale.attribution_order_click.source. See notebook 02_seed_dim_channel.'
+""")
+print("dim_channel created.")
 
-# channel_key uniqueness
-distinct_keys = written.select("channel_key").distinct().count()
-assert distinct_keys == written_count, (
-    f"channel_key not unique: {written_count} rows, {distinct_keys} distinct keys"
-)
+spark.sql(f"""
+INSERT INTO {TABLE} VALUES
+  (0,  'Unknown',            'Unknown',        false, false, current_timestamp()),
+  (1,  'facebook-ads',       'Paid Social',    true,  false, current_timestamp()),
+  (2,  'google-ads',         'Paid Search',    true,  false, current_timestamp()),
+  (3,  'bing',               'Paid Search',    true,  false, current_timestamp()),
+  (4,  'pinterest-ads',      'Paid Social',    true,  false, current_timestamp()),
+  (5,  'impact',             'Affiliate',      false, false, current_timestamp()),
+  (6,  'influencers',        'Influencer',     false, false, current_timestamp()),
+  (7,  'Emarsys',            'Email',          false, false, current_timestamp()),
+  (8,  'klaviyo',            'Email',          false, false, current_timestamp()),
+  (9,  'Promotional',        'Email',          false, false, current_timestamp()),
+  (10, 'Transactional',      'Email',          false, false, current_timestamp()),
+  (11, 'Tactics',            'Email',          false, false, current_timestamp()),
+  (12, 'attentive',          'SMS',            false, false, current_timestamp()),
+  (13, 'organic_and_social', 'Organic',        false, false, current_timestamp()),
+  (14, 'Direct',             'Direct',         false, false, current_timestamp()),
+  (15, 'shop_app',           'Shop App',       false, false, current_timestamp()),
+  (16, 'shop-website',       'Other',          false, false, current_timestamp()),
+  (17, 'AMZN_US_ShopDirect', 'Marketplace',    false, false, current_timestamp()),
+  (18, 'chatgpt.com',        'AI Search',      false, false, current_timestamp()),
+  (19, 'perplexity',         'AI Search',      false, false, current_timestamp()),
+  (20, 'copilot.com',        'AI Search',      false, false, current_timestamp()),
+  (21, 'Non-attributed',     'Non-attributed', false, true,  current_timestamp()),
+  (22, 'Excluded',           'Excluded',       false, true,  current_timestamp())
+""")
+print("dim_channel seeded.")
 
-# channel_source uniqueness (business key)
-distinct_sources = written.select("channel_source").distinct().count()
-assert distinct_sources == written_count, (
-    f"channel_source not unique: {written_count} rows, {distinct_sources} distinct sources"
-)
+print("=== Row count ===")
+display(spark.sql(f"SELECT COUNT(*) AS rows FROM {TABLE}"))
 
-# -1 unknown placeholder row must exist
-unknown_row = written.filter(F.col("channel_key") == -1).count()
-assert unknown_row == 1, (
-    f"Missing -1 'unknown' placeholder row in dim_channel (found {unknown_row})"
-)
+print("=== By channel_group (roll-up sanity check) ===")
+display(spark.sql(f"""
+  SELECT channel_group, COUNT(*) AS n_channels,
+         CONCAT_WS(', ', COLLECT_LIST(channel_source)) AS channels
+  FROM {TABLE} GROUP BY channel_group ORDER BY n_channels DESC
+"""))
 
-print("[OK] All post-write assertions passed")
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## 5. Visual inspection
-# MAGIC
-# MAGIC Log every distinct `legacy_channel_group` to verify the GA4-style grouping
-# MAGIC is what Leader expects to see in the demo.
-
-# COMMAND ----------
-
-print("[INFO] Full dim_channel contents:")
-written.orderBy("channel_key").show(50, truncate=False)
-
-print("[INFO] Distinct legacy_channel_group values (sorted):")
-(
-    written.select("legacy_channel_group")
-           .distinct()
-           .orderBy("legacy_channel_group")
-           .show(50, truncate=False)
-)
-
-print("[INFO] Paid vs non-paid breakdown:")
-written.groupBy("is_paid").count().show()
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## 6. Summary
-# MAGIC
-# MAGIC | Metric | Value |
-# MAGIC |---|---|
-# MAGIC | Target table | `mvdevdatabricks.analytics_platform_32degrees.dim_channel` |
-# MAGIC | Rows written | 16 |
-# MAGIC | Includes `-1` unknown placeholder | ✓ |
-# MAGIC | Includes Non-attributed / Excluded meta-categories | ✓ (Decision 14) |
-# MAGIC | Dual-display fields (channel_source + legacy_channel_group) | ✓ (Decision 15) |
+print("=== Paid channels ===")
+display(spark.sql(f"SELECT channel_source FROM {TABLE} WHERE is_paid = true"))
