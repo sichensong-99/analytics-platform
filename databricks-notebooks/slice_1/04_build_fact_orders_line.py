@@ -1,29 +1,25 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # Slice 1 — Notebook 04: Build `fact_orders_line` ⭐
+# MAGIC # Slice 1 — Notebook 04: Build `fact_orders_line`
+# MAGIC # Classic Compute Full Rebuild Version
 # MAGIC
-# MAGIC **Purpose**: Build the row-level sales fact table by joining Shopify order_line with
-# MAGIC Triple Whale (TW) last-touch attribution and resolving against the three dim tables.
+# MAGIC **Purpose**: Join Shopify order lines with Triple Whale click attribution
+# MAGIC and conformed dimensions to produce the row-grain sales fact table for Slice 1.
 # MAGIC
-# MAGIC **This is the technical centerpiece of Slice 1.** See `docs/architecture/slice_1_design.md`
-# MAGIC §8 (Cross-source Join Strategy) for the full design rationale.
+# MAGIC **Compute target**
+# MAGIC - This version is intended for Personal Compute / Classic Compute.
+# MAGIC - It uses DataFrame cache, which Serverless compute did not support.
 # MAGIC
-# MAGIC **Inputs**:
-# MAGIC - `mvdevdatabricks.shopify_32degrees.order`
-# MAGIC - `mvdevdatabricks.shopify_32degrees.order_line`
-# MAGIC - `mvdev_federated_catalog.triple_whale.attribution_order`
-# MAGIC - `mvdev_federated_catalog.triple_whale.attribution_order_click`
-# MAGIC - `mvdevdatabricks.analytics_platform_32degrees.dim_date`
-# MAGIC - `mvdevdatabricks.analytics_platform_32degrees.dim_channel`
-# MAGIC - `mvdevdatabricks.analytics_platform_32degrees.dim_product`
-# MAGIC
-# MAGIC **Output**: `mvdevdatabricks.analytics_platform_32degrees.fact_orders_line`
-# MAGIC
-# MAGIC **Idempotent**: Yes — full window rebuild via `mode("overwrite")` for slice 1. Phase 4
-# MAGIC will introduce incremental daily append.
-# MAGIC
-# MAGIC **Author**: Sia Song
-# MAGIC **Created**: 2026-05-19
+# MAGIC **Key logic**
+# MAGIC - Uses `attribution_order_click`, not `attribution_order`.
+# MAGIC - Uses `_triple_whale_order_id` as TW order join key.
+# MAGIC - Uses `source` as TW channel source.
+# MAGIC - Uses `position DESC, click_date DESC` for TW last-touch deduplication.
+# MAGIC - Adds conservative source normalization before `dim_channel` join.
+# MAGIC - Combines TW join diagnostics into one aggregation.
+# MAGIC - Combines DQ metrics into one aggregation.
+# MAGIC - Caches `fact_raw` before DQ and write.
+# MAGIC - Uses `NUM_WRITE_PARTITIONS = 32`, suitable for small Personal Compute.
 
 # COMMAND ----------
 
@@ -32,471 +28,521 @@
 
 # COMMAND ----------
 
-from pyspark.sql import functions as F, Window
+from pyspark.sql import functions as F
+from pyspark.sql.window import Window
 
-# ----- Target -----
+# --- Source tables ---
+SHOPIFY_CATALOG = "mvdevdatabricks"
+SHOPIFY_SCHEMA = "shopify_32degrees"
+
+TW_CATALOG = "mvdev_federated_catalog"
+TW_SCHEMA = "triple_whale"
+TW_ATTRIBUTION_CLICK_TABLE = "attribution_order_click"
+
+# --- Target ---
 TARGET_CATALOG = "mvdevdatabricks"
 TARGET_SCHEMA = "analytics_platform_32degrees"
 TARGET_TABLE = "fact_orders_line"
 FULL_TARGET = f"{TARGET_CATALOG}.{TARGET_SCHEMA}.{TARGET_TABLE}"
 
-# ----- Source tables -----
-SHOPIFY_ORDER = "mvdevdatabricks.shopify_32degrees.order"
-SHOPIFY_ORDER_LINE = "mvdevdatabricks.shopify_32degrees.order_line"
-TW_ATTR_ORDER = "mvdev_federated_catalog.triple_whale.attribution_order"
-TW_ATTR_ORDER_CLICK = "mvdev_federated_catalog.triple_whale.attribution_order_click"
+# --- Dims ---
 DIM_DATE = f"{TARGET_CATALOG}.{TARGET_SCHEMA}.dim_date"
-DIM_CHANNEL = f"{TARGET_CATALOG}.{TARGET_SCHEMA}.dim_channel"
 DIM_PRODUCT = f"{TARGET_CATALOG}.{TARGET_SCHEMA}.dim_product"
+DIM_CHANNEL = f"{TARGET_CATALOG}.{TARGET_SCHEMA}.dim_channel"
 
-# ----- Slice 1 ETL window (Decision 13: schema unbounded, ETL bounded) -----
-ETL_START_DATE = "2025-07-01"
+# --- ETL window ---
+# Full rebuild mode. Do not use this daily unless intentionally rebuilding history.
+ETL_START = "2025-07-01"
+ETL_END = "2099-12-31"
 
-# ----- TW attribution model (Decision in design doc §8.3) -----
-ATTRIBUTION_MODEL = "last_touch"
+# --- DQ SLO thresholds ---
+DQ_CHANNEL_WARN_PCT = 0.005   # 0.5%
+DQ_CHANNEL_FAIL_PCT = 0.020   # 2.0%
 
-# ----- Timezone (32 Degrees operates from New York) -----
-# Use Spark's DST-aware from_utc_timestamp with America/New_York timezone.
-# This handles EST (UTC-5, winter) and EDT (UTC-4, summer) transitions automatically,
-# correcting a known approximation in the legacy Panoply pipeline (which used a
-# static UTC-5 offset year-round). See design doc §8.7.
-BUSINESS_TIMEZONE = "America/New_York"
+DQ_PRODUCT_WARN_PCT = 0.010   # 1.0%
+DQ_PRODUCT_FAIL_PCT = 0.050   # 5.0%
 
-# ----- Run mode -----
-# 'smoke'   = last 1 day only (for Day 3 morning quick check)
-# 'full'    = full slice 1 window (for Day 3 afternoon production run)
-RUN_MODE = "full"   # change to 'smoke' for quick validation pass
+# --- Performance knobs ---
+# Personal compute is small, so do not use 400 partitions.
+# 32 is more appropriate for a 4-core cluster.
+NUM_WRITE_PARTITIONS = 32
 
-# ----- Multi-tier DQ thresholds -----
-# Calibrated against empirically observed healthy baseline:
-#   - TW <-> Shopify match rate >= 99.85% (validated across 11 months)
-#   - i.e., baseline unmatched channel rate ~ 0.15%
-#
-# Channel resolution:
-#   PASS  : unmatched < 0.5%   (~3x baseline buffer — normal variation tolerated)
-#   WARN  : 0.5% <= unmatched < 2.0%   (operational signal, pipeline continues)
-#   FAIL  : unmatched >= 2.0%   (~14x baseline — clear upstream anomaly, abort)
-#
-# Product resolution (looser; SKU drift from ERS upload cadence is more variable):
-#   PASS  : unmatched < 1.0%
-#   WARN  : 1.0% <= unmatched < 5.0%
-#   FAIL  : unmatched >= 5.0%
-#
-# Row count range (sanity check on volume):
-#   Expected ~10M rows for slice 1 window. Wide bounds for first-build tolerance.
-CHANNEL_WARN_PCT = 0.005
-CHANNEL_FAIL_PCT = 0.020
-PRODUCT_WARN_PCT = 0.010
-PRODUCT_FAIL_PCT = 0.050
-ROW_COUNT_MIN = 8_000_000
-ROW_COUNT_MAX = 12_000_000
+# Keep False to avoid extra full-table scans after write.
+RUN_POST_WRITE_VALIDATION = False
+
+try:
+    spark.conf.set("spark.sql.shuffle.partitions", str(NUM_WRITE_PARTITIONS))
+    print(f"[INFO] spark.sql.shuffle.partitions set to {NUM_WRITE_PARTITIONS}")
+except Exception as e:
+    print(f"[WARN] Could not set spark.sql.shuffle.partitions: {e}")
+
+print("[INFO] Configuration loaded")
+print(f"[INFO] Target table: {FULL_TARGET}")
+print(f"[INFO] ETL window: {ETL_START} -> {ETL_END}")
+print(f"[INFO] Write repartition count: {NUM_WRITE_PARTITIONS}")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 2. Define ETL window
+# MAGIC ## 2. Load source tables
 
 # COMMAND ----------
 
-if RUN_MODE == "smoke":
-    # Smoke: last 24 hours only
-    window_start_filter = F.expr("current_date() - INTERVAL 1 DAY")
-    window_end_filter = F.expr("current_date()")
-    print("[INFO] RUN_MODE=smoke — last 24 hours only")
-else:
-    window_start_filter = F.lit(ETL_START_DATE).cast("timestamp")
-    window_end_filter = F.expr("current_timestamp()")
-    print(f"[INFO] RUN_MODE=full — from {ETL_START_DATE} to now")
+print("[INFO] Loading source tables ...")
+
+orders = spark.table(f"{SHOPIFY_CATALOG}.{SHOPIFY_SCHEMA}.order").alias("o")
+order_lines = spark.table(f"{SHOPIFY_CATALOG}.{SHOPIFY_SCHEMA}.order_line").alias("ol")
+
+aoc = spark.table(
+    f"{TW_CATALOG}.{TW_SCHEMA}.{TW_ATTRIBUTION_CLICK_TABLE}"
+).alias("aoc")
+
+dim_date = spark.table(DIM_DATE).alias("dd")
+dim_product = spark.table(DIM_PRODUCT).alias("dp")
+dim_channel = spark.table(DIM_CHANNEL).alias("dc")
+
+print("[INFO] Source tables loaded")
+print("[INFO] TW attribution_order_click columns:")
+print(aoc.columns)
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 3. Read source tables
+# MAGIC ## 3. Prepare Shopify order lines
 
 # COMMAND ----------
 
-orders = (
-    spark.table(SHOPIFY_ORDER)
-         .filter(F.col("processed_at") >= window_start_filter)
-         .filter(F.col("processed_at") < window_end_filter)
-         .select(
-             F.col("id").alias("order_id"),
-             F.col("processed_at"),
-         )
+print("[INFO] Preparing Shopify order lines ...")
+
+ol_with_date = order_lines.join(
+    orders.select(
+        F.col("o.id").alias("order_id_hdr"),
+        F.col("o.name").alias("shopify_order_name"),
+        F.col("o.processed_at").alias("processed_at"),
+        F.col("o.financial_status").alias("financial_status"),
+    ),
+    on=F.col("ol.order_id") == F.col("order_id_hdr"),
+    how="inner",
 )
 
-order_lines = (
-    spark.table(SHOPIFY_ORDER_LINE)
-         .select(
-             F.col("id").alias("order_line_id"),
-             F.col("order_id"),
-             F.trim(F.col("sku")).alias("sku"),
-             F.col("quantity"),
-             F.col("price").alias("line_price"),
-             F.col("total_discount"),
-         )
+# DST-aware UTC -> Eastern conversion.
+# Shopify processed_at is treated as UTC and converted to America/New_York.
+ol_with_date = ol_with_date.withColumn(
+    "order_date_eastern",
+    F.from_utc_timestamp(F.col("processed_at"), "America/New_York"),
 )
 
-print(f"[INFO] Orders in window: {orders.count():,}")
-print(f"[INFO] Order_lines (unfiltered yet): {order_lines.count():,}")
+# dim_date key
+ol_with_date = ol_with_date.withColumn(
+    "date_key",
+    F.date_format(F.col("order_date_eastern"), "yyyyMMdd").cast("int"),
+)
+
+# Slice 1 ETL window
+ol_filtered = ol_with_date.filter(
+    (F.col("order_date_eastern") >= ETL_START) &
+    (F.col("order_date_eastern") <= ETL_END)
+)
+
+print("[INFO] Shopify order lines filtered to ETL window")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 4. Build TW last-touch channel map
+# MAGIC ## 4. Prepare TW attribution clicks — Last-touch + source normalization
 # MAGIC
-# MAGIC See design doc §8.4 — dedup multi-row touchpoints to exactly one row per order
-# MAGIC using a deterministic Window function.
-
-# COMMAND ----------
-
-# Filter attribution clicks to last_touch model only
-last_touch_clicks_raw = (
-    spark.table(TW_ATTR_ORDER_CLICK)
-         .filter(F.col("attribution_model") == ATTRIBUTION_MODEL)
-         .select(
-             F.col("_triple_whale_order_id").alias("tw_order_id"),
-             F.col("source").alias("channel_source"),
-             F.col("position"),
-             F.col("click_date"),
-         )
-)
-
-print(f"[INFO] Last-touch click rows (raw): {last_touch_clicks_raw.count():,}")
-
-# Deterministic dedup: max(position) tied by max(click_date)
-w_dedup = (
-    Window.partitionBy("tw_order_id")
-          .orderBy(
-              F.col("position").desc_nulls_last(),
-              F.col("click_date").desc_nulls_last(),
-          )
-)
-
-last_touch_per_order = (
-    last_touch_clicks_raw
-        .withColumn("rn", F.row_number().over(w_dedup))
-        .filter(F.col("rn") == 1)
-        .select("tw_order_id", "channel_source")
-)
-
-# Sanity: deduped rows must be unique by tw_order_id
-deduped_count = last_touch_per_order.count()
-distinct_tw_order_ids = last_touch_per_order.select("tw_order_id").distinct().count()
-assert deduped_count == distinct_tw_order_ids, (
-    f"Dedup failed: {deduped_count} rows but {distinct_tw_order_ids} distinct tw_order_ids"
-)
-print(f"[OK] Last-touch dedup: {deduped_count:,} unique order rows")
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## 5. Join Shopify orders to TW last-touch channel
-
-# COMMAND ----------
-
-# Cast Shopify order.id (BIGINT) to STRING to match TW _triple_whale_order_id (STRING).
-# See design doc §8.2 — this yields ≥ 99.85% match rate.
-orders_with_channel = (
-    orders
-        .withColumn("order_id_str", F.col("order_id").cast("string"))
-        .join(
-            last_touch_per_order,
-            F.col("order_id_str") == F.col("tw_order_id"),
-            "left",
-        )
-        .select(
-            F.col("order_id"),
-            F.col("processed_at"),
-            F.col("channel_source"),
-        )
-)
-
-matched = orders_with_channel.filter(F.col("channel_source").isNotNull()).count()
-total = orders_with_channel.count()
-unmatched_pct = (total - matched) / total if total > 0 else 0
-print(f"[INFO] Shopify ↔ TW order match: {matched:,}/{total:,} "
-      f"({matched/total:.4%} matched, {unmatched_pct:.4%} unmatched)")
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## 6. Compose pre-resolution fact (line × channel × processed_at)
-
-# COMMAND ----------
-
-# Inner-join order_line to orders_with_channel on order_id
-fact_pre = (
-    order_lines.alias("ol")
-        .join(orders_with_channel.alias("o"), on="order_id", how="inner")
-        .select(
-            F.col("ol.order_line_id"),
-            F.col("ol.order_id"),
-            F.col("o.processed_at"),
-            F.col("o.channel_source"),
-            F.col("ol.sku"),
-            F.col("ol.quantity"),
-            F.col("ol.line_price"),
-            F.col("ol.total_discount"),
-        )
-)
-
-print(f"[INFO] Pre-resolution fact row count: {fact_pre.count():,}")
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## 7. Derive `date_key` with DST-aware timezone normalization
+# MAGIC Actual TW click schema:
+# MAGIC - `_triple_whale_order_id`
+# MAGIC - `source`
+# MAGIC - `click_date`
+# MAGIC - `position`
 # MAGIC
-# MAGIC Per design doc §8.7 — `from_utc_timestamp` with `America/New_York` automatically handles
-# MAGIC EST (UTC-5, winter) ↔ EDT (UTC-4, summer) DST transitions. This corrects the legacy
-# MAGIC Panoply pipeline's known approximation (static UTC-5 year-round, ~1% systematic error
-# MAGIC on summer-half cross-midnight orders).
-
-# COMMAND ----------
-
-fact_with_date = (
-    fact_pre
-        .withColumn(
-            "processed_at_local",
-            F.from_utc_timestamp(F.col("processed_at"), BUSINESS_TIMEZONE),
-        )
-        .withColumn(
-            "date_key",
-            F.date_format(F.col("processed_at_local"), "yyyyMMdd").cast("int"),
-        )
-        .drop("processed_at_local")
-)
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## 8. Resolve `channel_key` against `dim_channel`
+# MAGIC Join:
+# MAGIC - Shopify `order_line.order_id`
+# MAGIC - TW `_triple_whale_order_id`
 # MAGIC
-# MAGIC Left-join channel_source → dim_channel. Unmatched (NULL channel_source or
-# MAGIC unseen value) resolves to `channel_key = -1`. See Decision 14 for the explicit
-# MAGIC inclusion of Non-attributed / Excluded categories.
+# MAGIC Last-touch rule:
+# MAGIC - `position DESC`
+# MAGIC - `click_date DESC`
+# MAGIC
+# MAGIC Normalization rules:
+# MAGIC - trim spaces
+# MAGIC - values beginning with `google%` -> `google-ads`
+# MAGIC - case-insensitive `emarsys` -> `Emarsys`
+# MAGIC - all other values unchanged
 
 # COMMAND ----------
 
-dim_channel = (
-    spark.table(DIM_CHANNEL)
-         .select("channel_key", "channel_source")
-)
+print("[INFO] Preparing TW attribution_order_click ...")
 
-fact_with_channel = (
-    fact_with_date
-        .join(F.broadcast(dim_channel), on="channel_source", how="left")
-        .withColumn("channel_key", F.coalesce(F.col("channel_key"), F.lit(-1)))
-)
+aoc_cols = set(aoc.columns)
 
-# COMMAND ----------
+required_cols = {
+    "_triple_whale_order_id",
+    "source",
+    "click_date",
+    "position",
+}
 
-# MAGIC %md
-# MAGIC ## 9. Resolve `product_key` against `dim_product`
+missing_cols = required_cols - aoc_cols
 
-# COMMAND ----------
-
-dim_product = (
-    spark.table(DIM_PRODUCT)
-         .select("product_key", "sku")
-)
-
-fact_with_product = (
-    fact_with_channel
-        .join(F.broadcast(dim_product), on="sku", how="left")
-        .withColumn("product_key", F.coalesce(F.col("product_key"), F.lit(-1)))
-)
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## 10. Validate `date_key` against `dim_date` (referential integrity)
-
-# COMMAND ----------
-
-dim_date = spark.table(DIM_DATE).select("date_key")
-
-orphan_dates = (
-    fact_with_product
-        .join(F.broadcast(dim_date), on="date_key", how="left_anti")
-        .select("date_key")
-        .distinct()
-)
-orphan_count = orphan_dates.count()
-if orphan_count > 0:
-    print(f"[WARN] {orphan_count} fact date_keys not present in dim_date:")
-    orphan_dates.show(20)
+if missing_cols:
     raise AssertionError(
-        "Fact contains date_keys outside dim_date range. "
-        "Extend dim_date (regenerate generate_dim_date.py with wider range) or filter fact ETL window."
+        f"[FAIL] Missing required columns in attribution_order_click: {sorted(missing_cols)}. "
+        f"Actual columns: {aoc.columns}"
     )
+
+print("[INFO] TW join field: aoc._triple_whale_order_id -> Shopify ol.order_id")
+print("[INFO] TW source field: source")
+print("[INFO] TW touch timestamp field: click_date")
+print("[INFO] TW last-touch order: position DESC, click_date DESC")
+
+# Last-touch deduplication:
+# one TW click attribution row per order.
+# Original design: position DESC, then click_date DESC.
+tw_dedup_window = Window.partitionBy(
+    F.col("aoc._triple_whale_order_id").cast("string")
+).orderBy(
+    F.col("aoc.position").cast("int").desc_nulls_last(),
+    F.col("aoc.click_date").desc_nulls_last(),
+)
+
+tw_lasttouch = (
+    aoc
+    .withColumn("_rn", F.row_number().over(tw_dedup_window))
+    .filter(F.col("_rn") == 1)
+    .drop("_rn")
+    .select(
+        F.col("aoc._triple_whale_order_id").cast("string").alias("tw_order_id"),
+        F.col("aoc.source").alias("tw_channel_source"),
+        F.col("aoc.click_date").alias("tw_touch_ts"),
+        F.col("aoc.position").cast("int").alias("position"),
+        F.col("aoc.attribution_model"),
+        F.col("aoc.campaign_id"),
+        F.col("aoc.adset_id"),
+        F.col("aoc.ad_id"),
+    )
+)
+
+# Source value normalization.
+tw_lasttouch_norm = (
+    tw_lasttouch
+    .withColumn("src_t", F.trim(F.col("tw_channel_source")))
+    .withColumn(
+        "channel_source_norm",
+        F.when(F.col("src_t").rlike("(?i)^google%"), F.lit("google-ads"))
+         .when(F.lower(F.col("src_t")) == F.lit("emarsys"), F.lit("Emarsys"))
+         .otherwise(F.col("src_t"))
+    )
+    .drop("src_t")
+)
+
+print("[INFO] TW last-touch attribution prepared with normalized source")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 5. Join TW attribution onto Shopify order lines
+
+# COMMAND ----------
+
+print("[INFO] Joining TW attribution onto order lines ...")
+
+ol_tw = ol_filtered.join(
+    tw_lasttouch_norm,
+    on=F.col("ol.order_id").cast("string") == F.col("tw_order_id"),
+    how="left",
+)
+
+# One action only for TW join diagnostics.
+tw_join_stats = ol_tw.agg(
+    F.count("*").alias("total_tw"),
+    F.sum(F.when(F.col("tw_order_id").isNotNull(), 1).otherwise(0)).alias("matched_tw"),
+    F.sum(F.when(F.col("tw_order_id").isNull(), 1).otherwise(0)).alias("unmatched_tw"),
+).first()
+
+total_tw = tw_join_stats["total_tw"]
+matched_tw = tw_join_stats["matched_tw"]
+unmatched_tw = tw_join_stats["unmatched_tw"]
+
+pct_unmatched = unmatched_tw / total_tw if total_tw > 0 else 0
+
+print(
+    f"[INFO] TW join — matched: {matched_tw:,} | unmatched: {unmatched_tw:,} "
+    f"| unmatched%: {pct_unmatched:.3%}"
+)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 6. Join conformed dimensions
+
+# COMMAND ----------
+
+print("[INFO] Joining dim_date ...")
+
+ol_d = ol_tw.join(
+    dim_date.select(
+        F.col("dd.date_key"),
+        F.col("dd.iso_year"),
+        F.col("dd.iso_week"),
+    ),
+    on="date_key",
+    how="left",
+)
+
+print("[INFO] Joining dim_product ...")
+
+ol_dp = ol_d.join(
+    dim_product.select(
+        F.col("dp.product_key"),
+        F.col("dp.sku").alias("dp_sku"),
+        F.col("dp.vend_id"),
+    ),
+    on=F.col("ol.sku") == F.col("dp_sku"),
+    how="left",
+)
+
+print("[INFO] Joining dim_channel ...")
+
+# IMPORTANT:
+# Join normalized TW source, not raw TW source.
+ol_dc = ol_dp.join(
+    dim_channel.select(
+        F.col("dc.channel_key"),
+        F.col("dc.channel_source").alias("dc_channel_source"),
+    ),
+    on=F.col("channel_source_norm") == F.col("dc_channel_source"),
+    how="left",
+)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 7. Build fact_raw and cache
+# MAGIC
+# MAGIC Classic compute supports cache.
+# MAGIC We cache and materialize `fact_raw` once so DQ and write can reuse it
+# MAGIC instead of recomputing the full Shopify + TW + dim join lineage.
+
+# COMMAND ----------
+
+print("[INFO] Building fact_raw ...")
+
+fact_raw = (
+    ol_dc.select(
+        # Surrogate keys
+        F.coalesce(F.col("dc.channel_key"), F.lit(0)).alias("channel_key"),
+        F.col("dp.product_key"),
+        F.col("date_key"),
+
+        # Degenerate dimensions
+        F.col("ol.order_id").cast("string").alias("shopify_order_id"),
+        F.col("shopify_order_name"),
+        F.col("tw_order_id"),
+        F.col("ol.id").cast("string").alias("shopify_line_id"),
+        F.col("ol.sku").alias("sku_raw"),
+
+        # Facts
+        F.col("ol.quantity").cast("int").alias("quantity"),
+        F.col("ol.price").cast("decimal(10,2)").alias("pre_tax_price"),
+
+        # Attribution metadata
+        F.col("tw_channel_source"),
+        F.col("channel_source_norm"),
+        F.col("tw_touch_ts"),
+        F.col("attribution_model"),
+        F.col("position"),
+        F.col("campaign_id"),
+        F.col("adset_id"),
+        F.col("ad_id"),
+
+        # Flags
+        F.col("financial_status"),
+        F.when(F.col("financial_status") == "refunded", True)
+         .otherwise(False).alias("is_refunded"),
+
+        # ISO date fields
+        F.col("dd.iso_year"),
+        F.col("dd.iso_week"),
+
+        # Lineage
+        F.current_timestamp().alias("_ingested_at"),
+    )
+    .cache()
+)
+
+# Force materialization once.
+# After this, DQ and write should reuse cached fact_raw.
+materialized_count = fact_raw.count()
+
+print(f"[INFO] fact_raw built and cached: {materialized_count:,} rows")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 8. Multi-tier DQ SLO check — single aggregation
+
+# COMMAND ----------
+
+print("[INFO] Running DQ checks in a single aggregation ...")
+
+dq_stats = fact_raw.agg(
+    F.count("*").alias("total"),
+    F.sum(F.when(F.col("channel_key") == 0, 1).otherwise(0)).alias("channel_unknown"),
+    F.sum(F.when(F.col("product_key").isNull(), 1).otherwise(0)).alias("product_null"),
+).first()
+
+total = dq_stats["total"]
+channel_unknown = dq_stats["channel_unknown"]
+product_null = dq_stats["product_null"]
+
+channel_unknown_pct = channel_unknown / total if total > 0 else 0
+product_null_pct = product_null / total if total > 0 else 0
+
+print(f"[INFO] Total fact rows before write: {total:,}")
+print(f"[INFO] channel DQ — unknown: {channel_unknown:,} ({channel_unknown_pct:.3%})")
+print(f"[INFO] product DQ — unmatched: {product_null:,} ({product_null_pct:.3%})")
+
+# --- Channel DQ ---
+if channel_unknown_pct >= DQ_CHANNEL_FAIL_PCT:
+    print("[INFO] Top unknown channel source values:")
+
+    fact_raw.filter(F.col("channel_key") == 0) \
+        .groupBy("tw_channel_source", "channel_source_norm") \
+        .count() \
+        .orderBy(F.desc("count")) \
+        .show(30, truncate=False)
+
+    raise AssertionError(
+        f"[FAIL] Channel match rate below SLO: {channel_unknown_pct:.3%} unmatched "
+        f"(threshold: {DQ_CHANNEL_FAIL_PCT:.1%}). "
+        f"Check dim_channel seed and TW source values."
+    )
+
+elif channel_unknown_pct >= DQ_CHANNEL_WARN_PCT:
+    print(
+        f"[WARN] Channel unmatched rate {channel_unknown_pct:.3%} exceeds WARN "
+        f"threshold {DQ_CHANNEL_WARN_PCT:.1%} — investigate but pipeline continues."
+    )
+
 else:
-    print("[OK] All fact date_keys exist in dim_date")
+    print(
+        f"[PASS] Channel DQ — {channel_unknown_pct:.3%} unmatched "
+        f"below WARN threshold"
+    )
+
+# --- Product DQ ---
+if product_null_pct >= DQ_PRODUCT_FAIL_PCT:
+    print("[INFO] Top unmatched product SKU values:")
+
+    fact_raw.filter(F.col("product_key").isNull()) \
+        .groupBy("sku_raw") \
+        .count() \
+        .orderBy(F.desc("count")) \
+        .show(30, truncate=False)
+
+    raise AssertionError(
+        f"[FAIL] Product match rate below SLO: {product_null_pct:.3%} unmatched "
+        f"(threshold: {DQ_PRODUCT_FAIL_PCT:.1%}). "
+        f"Check dim_product SKU coverage vs Shopify order_line.sku."
+    )
+
+elif product_null_pct >= DQ_PRODUCT_WARN_PCT:
+    print(
+        f"[WARN] Product unmatched rate {product_null_pct:.3%} exceeds WARN "
+        f"threshold {DQ_PRODUCT_WARN_PCT:.1%} — investigate but pipeline continues."
+    )
+
+else:
+    print(
+        f"[PASS] Product DQ — {product_null_pct:.3%} unmatched "
+        f"below WARN threshold"
+    )
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 11. Final shape and multi-tier DQ assertions
+# MAGIC ## 9. Write Delta table
+# MAGIC
+# MAGIC Write cached `fact_raw` to Delta.
+# MAGIC
+# MAGIC `NUM_WRITE_PARTITIONS = 32` is chosen for small Personal Compute.
+# MAGIC This avoids excessive small files and task scheduling overhead.
 
 # COMMAND ----------
 
-fact_final = (
-    fact_with_product
-        .select(
-            F.col("order_line_id"),
-            F.col("order_id"),
-            F.col("date_key"),
-            F.col("channel_key"),
-            F.col("product_key"),
-            F.col("quantity"),
-            F.col("line_price"),
-            F.col("total_discount"),
-            F.current_timestamp().alias("_ingest_at"),
-        )
-)
+print(f"[INFO] Writing to {FULL_TARGET} ...")
 
-total_rows = fact_final.count()
-print(f"[INFO] Final fact row count: {total_rows:,}")
-
-# COMMAND ----------
-
-def check_multi_tier(name: str, observed: float, warn: float, fail: float):
-    """Multi-tier DQ check: PASS / WARN / FAIL based on thresholds."""
-    if observed >= fail:
-        msg = (
-            f"[FAIL] {name}: {observed:.4%} >= FAIL threshold {fail:.4%}. "
-            f"Aborting pipeline — investigate upstream data integrity before retry."
-        )
-        print(msg)
-        raise AssertionError(msg)
-    elif observed >= warn:
-        print(
-            f"[WARN] {name}: {observed:.4%} in WARN band [{warn:.4%}, {fail:.4%}). "
-            f"Pipeline continues; review on next DQ report."
-        )
-    else:
-        print(
-            f"[OK]   {name}: {observed:.4%} < WARN threshold {warn:.4%}"
-        )
-
-# DQ-1: order_line_id PK uniqueness (hard fail — no tier, this must always hold)
-distinct_ids = fact_final.select("order_line_id").distinct().count()
-assert distinct_ids == total_rows, (
-    f"order_line_id not unique: {total_rows} rows, {distinct_ids} distinct IDs"
-)
-print(f"[OK]   PK uniqueness: {distinct_ids:,} unique order_line_ids")
-
-# DQ-2: channel resolution (multi-tier)
-unresolved_channel = fact_final.filter(F.col("channel_key") == -1).count()
-unresolved_channel_pct = unresolved_channel / total_rows if total_rows > 0 else 0
-check_multi_tier(
-    name=f"Unresolved channel ({unresolved_channel:,}/{total_rows:,})",
-    observed=unresolved_channel_pct,
-    warn=CHANNEL_WARN_PCT,
-    fail=CHANNEL_FAIL_PCT,
-)
-
-# DQ-3: product resolution (multi-tier)
-unresolved_product = fact_final.filter(F.col("product_key") == -1).count()
-unresolved_product_pct = unresolved_product / total_rows if total_rows > 0 else 0
-check_multi_tier(
-    name=f"Unresolved product ({unresolved_product:,}/{total_rows:,})",
-    observed=unresolved_product_pct,
-    warn=PRODUCT_WARN_PCT,
-    fail=PRODUCT_FAIL_PCT,
-)
-
-# DQ-4: row count sanity (only meaningful in full mode)
-if RUN_MODE == "full":
-    if not (ROW_COUNT_MIN <= total_rows <= ROW_COUNT_MAX):
-        print(f"[WARN] Row count {total_rows:,} outside expected range "
-              f"[{ROW_COUNT_MIN:,}, {ROW_COUNT_MAX:,}]. Continuing.")
-    else:
-        print(f"[OK]   Row count {total_rows:,} within expected range")
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## 12. Write Delta table (partitioned by date_key)
-
-# COMMAND ----------
-
-print(f"[INFO] Writing to {FULL_TARGET}")
+fact_to_write = fact_raw.repartition(NUM_WRITE_PARTITIONS)
 
 (
-    fact_final
-        .write
+    fact_to_write.write
         .format("delta")
         .mode("overwrite")
         .option("overwriteSchema", "true")
-        .partitionBy("date_key")
+        .partitionBy("iso_year", "iso_week")
         .saveAsTable(FULL_TARGET)
 )
 
-print(f"[OK] Write complete")
+print("[OK] Write complete")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 13. Z-ORDER optimization
-# MAGIC
-# MAGIC Per design doc §10.2 — colocate by `channel_key, product_key` to speed up
-# MAGIC drill-down matrix queries.
+# MAGIC ## 10. Optional post-write validation
 
 # COMMAND ----------
 
-if RUN_MODE == "full":
-    print(f"[INFO] Running OPTIMIZE ... ZORDER BY (channel_key, product_key)")
-    spark.sql(f"OPTIMIZE {FULL_TARGET} ZORDER BY (channel_key, product_key)")
-    print("[OK] Optimization complete")
+if RUN_POST_WRITE_VALIDATION:
+    print("[INFO] Running post-write validation ...")
+
+    written = spark.table(FULL_TARGET)
+
+    written.select(
+        F.count("*").alias("row_count"),
+        F.min("date_key").alias("min_date"),
+        F.max("date_key").alias("max_date"),
+    ).show()
+
+    print("[INFO] Latest Delta history:")
+    spark.sql(f"DESCRIBE HISTORY {FULL_TARGET}").show(5, truncate=False)
+
 else:
-    print("[INFO] Skipping ZORDER in smoke mode")
+    print("[INFO] Skipping post-write full-table validation to avoid extra scan.")
+    print("[INFO] Latest Delta history:")
+    spark.sql(f"DESCRIBE HISTORY {FULL_TARGET}").show(5, truncate=False)
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 14. Post-write summary
+# MAGIC ## 11. Cleanup
 
 # COMMAND ----------
 
-written = spark.table(FULL_TARGET)
-print(f"[INFO] Final table row count: {written.count():,}")
+print("[INFO] Releasing cached fact_raw ...")
+fact_raw.unpersist()
 
-print("[INFO] Sample rows:")
-written.orderBy(F.col("date_key").desc(), F.col("order_line_id")).limit(10).show(truncate=False)
-
-print("[INFO] Daily row count (last 10 days in window):")
-(
-    written.groupBy("date_key")
-           .count()
-           .orderBy(F.col("date_key").desc())
-           .limit(10)
-           .show()
-)
-
-print("[INFO] Channel breakdown (top 10 by row count):")
-(
-    written.groupBy("channel_key")
-           .count()
-           .orderBy(F.col("count").desc())
-           .limit(10)
-           .show()
-)
+print(f"\n[OK] fact_orders_line full rebuild completed — {total:,} rows prepared and written")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 15. Summary
+# MAGIC ## 12. Summary Notes
 # MAGIC
 # MAGIC | Metric | Value |
 # MAGIC |---|---|
-# MAGIC | Target | `mvdevdatabricks.analytics_platform_32degrees.fact_orders_line` |
-# MAGIC | Grain | One row per Shopify order_line item |
-# MAGIC | ETL window | 2025-07-01 → now |
-# MAGIC | Attribution model | last_touch (Decision §8.3) |
-# MAGIC | Partition | date_key |
-# MAGIC | Z-ORDER | channel_key, product_key |
-# MAGIC | Timezone | America/New_York via `from_utc_timestamp` (DST-aware) |
-# MAGIC | DQ tiers | PASS / WARN / FAIL with calibrated thresholds |
-# MAGIC | Idempotent | Yes — overwrite mode |
+# MAGIC | Target table | `mvdevdatabricks.analytics_platform_32degrees.fact_orders_line` |
+# MAGIC | ETL window | 2025-07-01 → present |
+# MAGIC | Grain | One row per Shopify order line |
+# MAGIC | TW source table | `attribution_order_click` |
+# MAGIC | TW join | Shopify `order_line.order_id` → TW `_triple_whale_order_id` |
+# MAGIC | TW attribution | Last-touch dedup via `position DESC`, `click_date DESC` |
+# MAGIC | Channel normalization | `emarsys` → `Emarsys`; `google%...` → `google-ads`; others unchanged |
+# MAGIC | Channel fallback | `channel_key = 0` for unmatched channel values |
+# MAGIC | DQ SLO | Multi-tier PASS/WARN/FAIL |
+# MAGIC | Performance | Cached `fact_raw`, single TW stats aggregation, single DQ aggregation, 32 write partitions |
+# MAGIC | Compute | Classic / Personal Compute |
+# MAGIC | Timezone | DST-aware `America/New_York` |
+# MAGIC | Partition | `iso_year`, `iso_week` |
+# MAGIC | Write mode | Full overwrite |

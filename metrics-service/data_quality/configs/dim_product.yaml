@@ -1,0 +1,38 @@
+# Data quality checks for dim_product (Slice 1)
+# Source: ERS monthly CSV uploads → notebook 03_build_dim_product.py
+# Note: dual-format ingest (legacy + post-2026 schema-detection)
+
+description: "Data quality checks for dim_product — ERS product master with schema-evolution tolerance"
+owner: "sia"
+version: "1.0"
+table_fqn: "mvdevdatabricks.analytics_platform_32degrees.dim_product"
+
+checks:
+  # ===== Completeness =====
+  - type: not_null
+    table: dim_product
+    column: product_key
+
+  - type: not_null
+    table: dim_product
+    column: sku
+
+  - type: not_null
+    table: dim_product
+    column: vend_id
+
+  # ===== Uniqueness =====
+  - type: unique
+    table: dim_product
+    column: product_key
+
+  - type: unique
+    table: dim_product
+    column: sku
+
+  # ===== Freshness =====
+  # ERS uploaded monthly — alert if no refresh in 45 days
+  - type: freshness
+    table: dim_product
+    column: _ingested_at
+    max_age_hours: 1080  # 45 days
