@@ -1,17 +1,16 @@
-## 🔴 当前状态(2026-05-20 收盘)— 新 chat 必读
+## 🟢 当前状态(2026-05-21 收盘)— 新 chat 必读
 
-**项目位置**:Phase 2B/3 — Slice 1 垂直切片 ETL 实建,Day 3
-**当前卡点**:notebook 04 `fact_orders_line` 因 channel DQ FAIL,表未写入
-**下一步**:明天上班跑一句 SQL 查 TW 真实 channel 值 → 修 dim_channel 种子 → 重跑 04
+**项目位置**:Phase 2B/3 — Slice 1 垂直切片,Day 3 完成
+**Day 3 结果**:fact_orders_line 全量重建成功,9,965,352 行写入
+**下一步**:Day 4 — FastAPI databricks_client 从 mock 换成真实 SQL Warehouse 连接
 
 ### Slice 1 四张表进度
-
 | 表 | Notebook | 状态 | 行数 |
 |---|---|---|---|
 | `dim_date` | 01 | ✅ 已建 | 2,922 |
-| `dim_channel` | 02 | ⚠️ 已建但种子值错误,需重做 | 16(需重写) |
+| `dim_channel` | 02 | ✅ 重建完成(v2.0 真实种子值) | 23 |
 | `dim_product` | 03 | ✅ 已建 | 36,680 |
-| `fact_orders_line` | 04 | ❌ DQ FAIL,未写入 | — |
+| `fact_orders_line` | 04 | ✅ 已建(全量重建) | 9,965,352 |
 
 ### 环境就绪情况
 - Databricks schema `mvdevdatabricks.analytics_platform_32degrees` 权限确认:ALL PRIVILEGES + EXTERNAL USE SCHEMA + MANAGE
