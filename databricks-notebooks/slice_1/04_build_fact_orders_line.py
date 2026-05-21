@@ -1,3 +1,7 @@
+# MAGIC **Run mode**: FULL REBUILD / BACKFILL only.
+# MAGIC Not for daily incremental loads. Incremental version (watermark +
+# MAGIC 2-day lookback) is implemented in Phase 4 — see phase4_orchestration_design.md.
+
 # Databricks notebook source
 # MAGIC %md
 # MAGIC # Slice 1 — Notebook 04: Build `fact_orders_line`
