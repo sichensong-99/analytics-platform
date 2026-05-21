@@ -783,6 +783,7 @@ Slice 1 frontend changes are visually verified manually. Snapshot testing is add
 | R3 | Cross-year ISO week edge case (W52/W53) produces visible Leader-facing diff vs Panoply | Low | Medium | Document the difference proactively (`existing_data_inventory.md` §5.1.4 Insight #2 already covers); explain in demo as "intentional correction, not bug." |
 | R4 | ERS upload missing or stale on Day 2 | Low | High (blocks dim_product) | Upload preparation included in Day 2 step 3 explicitly. Backup: re-use last month's CSV with warning surfaced in DQ. |
 | R5 | Reconciliation diff > 2% threshold | Medium | High (erodes Leader trust) | Drill into the diff using the §9.2 query output. Most likely cause: channel taxonomy mismatch — known and explainable. Pre-prepare a 3-bullet explanation for the demo. |
+| R6 | Multi-tenant raw attribution table | `attribution_order_click` contains non-32D brands (TW pipeline does not filter by account). | Low (Slice 1) | Join on globally-unique `_triple_whale_order_id` isolates 32D data — foreign-brand clicks cannot match 32D orders. Performance cost only (oversized scan). Future: filter at ingestion by account_id. |
 
 ---
 

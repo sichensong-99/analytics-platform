@@ -1,3 +1,88 @@
+## 🔴 当前状态(2026-05-20 收盘)— 新 chat 必读
+
+**项目位置**:Phase 2B/3 — Slice 1 垂直切片 ETL 实建,Day 3
+**当前卡点**:notebook 04 `fact_orders_line` 因 channel DQ FAIL,表未写入
+**下一步**:明天上班跑一句 SQL 查 TW 真实 channel 值 → 修 dim_channel 种子 → 重跑 04
+
+### Slice 1 四张表进度
+
+| 表 | Notebook | 状态 | 行数 |
+|---|---|---|---|
+| `dim_date` | 01 | ✅ 已建 | 2,922 |
+| `dim_channel` | 02 | ⚠️ 已建但种子值错误,需重做 | 16(需重写) |
+| `dim_product` | 03 | ✅ 已建 | 36,680 |
+| `fact_orders_line` | 04 | ❌ DQ FAIL,未写入 | — |
+
+### 环境就绪情况
+- Databricks schema `mvdevdatabricks.analytics_platform_32degrees` 权限确认:ALL PRIVILEGES + EXTERNAL USE SCHEMA + MANAGE
+- ERS Volume 决策:用共享 `mvdevdatabricks.32degrees.raw_uploads/ers/`(ERS 是全公司产品主数据,放共享 raw zone 是正确架构;无需等同事建独立 Volume — 此决策应作为 Decision 20 补入 PROJECT_CONTEXT)
+- notebook 全部存放在 Databricks Workspace `Users/sia.song@32degrees.com/analytics-platform/slice_1/`
+
+### Notebook 01-03 实建细节(已跑通)
+- **notebook 01 `dim_date`**:原设计从 Volume 读 Parquet,因新 schema 无 Volume,改为 in-notebook PySpark 直接生成(纯算法,无外部文件依赖)。2922 行,ISO 8601 跨年边界 spot check(2024-12-30→2025-W01,2025-12-29→2026-W01)通过。
+- **notebook 02 `dim_channel`**:16 行种子载入成功,但**种子里的 channel_source 值是按推测写的(google-ads/meta/klaviyo...),与 TW 真实数据对不上 → 是 notebook 04 FAIL 的根因,需重写**。
+- **notebook 03 `dim_product`**:ERS CSV 自动检测为 current 格式(列名 SKU/Style#/Item Description 带空格 + Geodis/Ladder 列)。Decision 19 双格式检测生效。36,680 行,is_complete 全部 true。SKU 主键格式 `TLF60281DRT-067-XS`,vend_id = Style#。
+
+### Notebook 04 关键发现(重要,新 chat 需知)
+- **TW 正确的归因表是 `attribution_order_click`**,不是 `attribution_order`(后者只有 9 列,无 channel 信息)
+- `attribution_order_click` 关键列:`_triple_whale_order_id`(STRING,join key)、`source`(channel)、`click_date`(timestamp,last-touch 去重用)
+- join key 映射:Shopify `order.id`(BIGINT,cast STRING)↔ TW `_triple_whale_order_id`(STRING)
+- Shopify `order` 表**无 `tags` 列**;`order_line.order_id` 是 BIGINT;`order_line.sku` 存在
+- **TW join 成功率高**:990 万行中 unmatched 仅 0.280%(PASS)
+- **但 channel DQ FAIL:44.5% 的行 channel_key=0(unknown)**
+- 根因:dim_channel 种子的 channel_source 值与 TW `attribution_order_click.source` 实际值不匹配
+- DQ-as-Gate 按设计拦截坏数据,未写入表 ✅
+- **[Known-issue] `attribution_order_click` 是多租户原始落地表**:`source` 列长尾里出现非 32D 品牌(`DuckaDilly Newsletter` / `Catalinbread Newsletter` / `HealthRangerStore.com` 等),说明该表未按 32D 账号过滤。**对 Slice 1 无影响** —— 跨源 join 以 `_triple_whale_order_id`(= 全局唯一的 Shopify order.id)为 key,外部品牌的点击 join 不上 32D 订单,天然被隔离,不进 fact 表。唯一代价是 ETL 读了比实际需要更大的表(性能,Slice 1 可接受)。**未与 Databricks 同事沟通(不阻塞,不属其职责范围)**;建议未来在 ingestion 层按 account_id 过滤作为成本优化项。
+
+### 明天第一步要跑的 SQL
+\```sql
+SELECT source, COUNT(*) AS cnt
+FROM mvdev_federated_catalog.triple_whale.attribution_order_click
+GROUP BY source
+ORDER BY cnt DESC;
+\```
+两种可能:
+- 情况 A:TW source 只是名字写法不同 → 改 dim_channel 种子名字,重跑 02 + 04
+- 情况 B:那 44% 的 source 本身是 NULL/空 → 这些订单 TW 未归因,需决定归到哪个 channel(direct?unknown?)
+
+### Notebook 04 已知性能优化点(下次重跑前要改)
+- Section 8 生成 surrogate key `order_line_key` 用了无 partitionBy 的 `Window.orderBy()` → 全量 shuffle,导致跑了 1 小时+
+- 修复:改用 `F.monotonically_increasing_id()`,零 shuffle。替换代码:
+\```python
+fact_final = fact_raw.withColumn(
+    "order_line_key",
+    F.monotonically_increasing_id(),
+).select(
+    "order_line_key", "channel_key", "product_key", "date_key",
+    "shopify_order_id", "shopify_line_id", "sku_raw",
+    "quantity", "pre_tax_price", "tw_channel_source", "tw_click_ts",
+    "financial_status", "is_refunded", "iso_year", "iso_week", "_ingested_at",
+)
+\```
+
+### 数据量级实测(简历素材 — 真实规模数字)
+- Shopify `order`:11.45M 行
+- Shopify `order_line`:44.67M 行
+- TW `attribution_order_click`:25.26M 行
+- Slice 1 ETL 窗口(2025-07-01+)order line:9.94M 行
+- → 简历可写"端到端处理千万级订单行数据"
+
+### Day 4-5 计划(notebook 04 跑通后)
+- Day 4:`metrics-service/app/databricks_client.py` 把 mock 换成真实 Databricks SQL 连接
+- Day 4.5:数据正确率验证 — 用 Panoply `Style_selling_df` 对比新平台,< 2% trust gate(Claude 会带做)
+- Day 5:端到端 wire-up + Leader demo
+
+---
+
+### 2026-05-19/20 完成任务汇总(P0 + H)
+- ✅ Task A-D:Decision Log / 架构文档 / dim_date 脚本 / 4 notebook 骨架
+- ✅ Task E:definitions.yaml 追加 quantity_by_style_channel_week + main.py 泛型 filter + databricks_client mock
+- ✅ Task F:Next.js `style-channel-quantity` page(跑通验证 OK)+ API proxy 白名单转发 + dashboards 列表入口
+- ✅ Task G:4 张 Slice 1 表 DQ YAML(dim_date/dim_channel/dim_product/fact_orders_line)
+- ✅ Task H2/H4/H5:Reconciliation 脚本 / legacy_panoply_etl.md v3 / Decision Log 17-19
+- ✅ Slice 1 Day 2-3:notebook 01/02/03 真实建表,notebook 04 卡 channel DQ
+- ⏳ 剩余:notebook 04 修复 + Day 4-5 + H3(下一个 PBI page)+ H6(demo script)
+
 ### 2026-05-19 — Pre-permission preparation tasks (P0 A/B/C/D) 完成
 
 权限到位前的 4 个零返工准备任务已完成,代码层 Day 2-3 完全 ready。

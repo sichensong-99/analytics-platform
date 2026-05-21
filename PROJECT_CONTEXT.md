@@ -193,15 +193,16 @@
   - ❌ Leader 看 PBI 旧报表时这两类是没有的,demo 时需要解释
 - **关键词**:Explicit Modeling over Silent Filtering / Data Completeness / Conway's Law in Data Modeling
 
-### Decision 15:Channel 双显示策略 — channel_source(TW 原值) + legacy_channel_group(GA4 风格)
-- **日期**:2026-05-18
-- **背景**:TW 数据 owner 同事每天看 TW UI(用 `google-ads` / `meta` 这种平台名);Leader 看了多年的 PBI 报表(用 `Paid Search` / `Paid Social` 这种功能名)。两类用户的认知习惯不同。
-- **结论**:`dim_channel` 表里同时保留两个字段 —— `channel_source` 保 TW 原值(服务 TW 同事),`legacy_channel_group` 加 GA4 风格分组(服务 Leader 对旧 PBI 的认知惯性)。同一 dim 表服务两类用户,**Conway's Law 在数据建模中的应用**。
+### Decision 15:Channel 维度展示策略 — channel_source 为默认显示值,channel_group 为上卷层级
+- **日期**:2026-05-18(v2 修订 2026-05-21,见 Decision 21)
+- **背景**:TW 数据 owner 同事每天看 TW portal,认知锚点是 TW 原始 channel 名(`google-ads` / `facebook-ads`)。高管看 dashboard 需要少数几个大类,不可能看 20+ 根柱子。
+- **结论**:`dim_channel` 保留两个字段服务两种粒度 —— `channel_source` 保 TW 原值(前端默认显示值,与 TW portal 1:1 一致),`channel_group` 作为上卷层级供高管级聚合下钻。
 - **Trade-off**:
-  - ✅ 不强迫任何一方学对方的术语
-  - ✅ 切换 PBI → 新平台时降低认知摩擦
-  - ❌ Dim 表多一列,但行数低(<20),存储成本可忽略
-- **关键词**:Dual-Display Dimension / Stakeholder-Aware Schema Design / Conway's Law / Platform Migration Cognitive Cost Mitigation
+  - ✅ 运营同事在新平台看到的 channel 标签与 TW portal 完全一致,零迁移摩擦
+  - ✅ 高管视图有可用的聚合粒度,符合 Kimball 维度上卷设计
+  - ❌ Dim 表多一列,但行数低(<25),存储成本可忽略
+- **关键词**:Dimensional Roll-up Hierarchy / Stakeholder-Aware Schema Design / Source-Faithful Display
+- **⚠️ 注**:此决策最初(v1)将第二列定位为 "legacy GA4 compatibility"。2026-05-21 经 Decision 21 修订为「上卷层级」定位 —— 框架更承重、更经得起面试追问。
 
 ### Decision 16:is_paid forward-looking flag 保留,is_web_attributed / is_operational 砍掉
 - **日期**:2026-05-18
@@ -250,6 +251,32 @@
   - ✅ 简历金句:"Built schema-evolution-tolerant ingest detecting and normalizing two distinct source schema versions"
   - ❌ 代码复杂度略增(增加 detect_and_normalize_ers 函数),但收益明显大于成本
 - **关键词**:Schema Evolution Tolerance / Ingest Robustness / Backward Compatibility
+
+### Decision 20:ERS 原始文件落地用共享 Volume,不建项目专属 Volume
+- **日期**:2026-05-20
+- **背景**:dim_product 需要读 ERS CSV。新 schema `analytics_platform_32degrees` 下没有 Volume,需等同事创建。
+- **结论**:ERS CSV 上传到共享的 `mvdevdatabricks.32degrees.raw_uploads/ers/` 子目录,不为本项目单独建 Volume。
+- **Trade-off**:
+  - ✅ ERS 是全公司共享的产品主数据,放共享 raw landing zone 由各项目 ETL 各自消费,是正确的 conformed reference data 架构
+  - ✅ 不阻塞,不依赖同事
+  - ✅ 命名空间清晰度不受影响 — 项目自己产出的 dim/fact 表全部仍在独立 schema 内,Volume 只是原始文件落地区
+  - ✅ 简历金句:"Treated ERS product master as a shared conformed reference source in a common raw zone, consumed independently by the dim_product ETL"
+- **关键词**:Shared Raw Zone / Conformed Reference Data / Cross-project Data Reuse
+
+### Decision 21:channel 第二列从「GA4 兼容」重定位为「Kimball 上卷层级」,并改名 channel_group
+- **日期**:2026-05-21
+- **背景**:重建 dim_channel 种子时 review 了 Decision 15 的 dual-display 设计。原方案把第二列 `legacy_channel_group` 定位为「服务高管对 GA4 旧报表的认知惯性」。问题:GA4 本身正在被 TW 取代,一个「为已退役系统做兼容」的字段经不起面试追问("GA4 都不用了,这列谁在看?")。
+- **结论**:
+  - 列改名 `legacy_channel_group` → `channel_group`
+  - 重新定位:它不是「GA4 兼容字段」,而是 channel 维度的**上卷层级**(roll-up hierarchy)——`channel_source`(24 个明细) → `channel_group`(~10 个大类)。这是 Kimball 维度建模的标准 drill-down hierarchy,等同于 product → category、date → month → year。
+  - 分组值(Paid Search / Paid Social / Email)是全行业通用的功能分类,并非 GA4 专有 —— 用它当上卷层级,与 GA4 是否退役无关。
+- **Trade-off**:
+  - ✅ 框架是「承重的」—— 上卷层级撑起高管聚合视图,而非可有可无的兼容列
+  - ✅ 经得起面试 3 层追问(Kimball 教科书概念 vs 「leader 的旧习惯」这种弱解释)
+  - ✅ 与 dim_date / dim_product 的层级设计语言统一
+  - ❌ 需同步改 DDL 列名 + notebook 02 + 重建表 —— 但 dim_channel 本就要重建(种子值错误),边际成本为零
+- **关键词**:Dimensional Roll-up Hierarchy / Drill-down Path Design / Schema Semantics Refactoring
+- **取代**:本决策取代 Decision 15 v1 对第二列的定位。
 ---
 
 ## 6. 项目仓库

@@ -67,48 +67,53 @@
 USE CATALOG mvdevdatabricks;
 USE SCHEMA analytics_platform_32degrees;
 
-
 -- ============================================================================
--- 1. DIM_DATE — Conformed date dimension (ISO 8601)
+-- dim_channel — Marketing channel dimension
 -- ----------------------------------------------------------------------------
--- Static reference table. Pre-generated for 2023-01-01 to 2030-12-31.
+-- Source      : triple_whale.attribution_order_click.source (seeded, not derived)
+-- Grain       : one row per distinct Triple Whale channel source
+-- Load        : version-controlled seed (see notebook 02_seed_dim_channel)
+-- SCD         : SCD1 (overwrite) — see Decision 12
+--
+-- Changelog
+--   v1.0  Initial 4-table star schema.
+--   v1.1  Dropped is_web_attributed / is_operational; renamed ga4_channel_name
+--         -> legacy_channel_group. (Decision 16)
+--   v2.0  (2026-05-21) Full rebuild:
+--           - Seed values switched from GUESSED to real attribution_order_click
+--             .source values (guessed values were the root cause of the
+--             notebook 04 channel DQ FAIL — 44.5% channel_key=0).
+--           - Renamed legacy_channel_group -> channel_group, repositioned from
+--             "GA4-legacy compatibility column" to a Kimball roll-up hierarchy
+--             level. (Decision 21, supersedes Decision 15)
+--           - Added is_meta_category to explicitly flag TW operational
+--             meta-categories (Non-attributed / Excluded). (Decision 14)
+--           - channel_key = 0 is permanently reserved for the explicit
+--             'Unknown' catch-all member.
+--
+-- Design notes
+--   - channel_source  : Triple Whale raw value, matches TW portal 1:1. This is
+--                       the default display value in the frontend portal so
+--                       operators see the same labels as in the TW portal.
+--   - channel_group   : roll-up hierarchy level for executive aggregation
+--                       (Paid Search / Paid Social / Email / Organic / ...).
+--                       NOT a GA4-compatibility field — it is the dimension's
+--                       drill hierarchy (channel_source -> channel_group).
+--   - is_paid         : TRUE only for paid advertising platforms carrying media
+--                       ad_spend (the paid-media ROAS denominator). Affiliate
+--                       and influencer are FALSE — commission-based cost, not
+--                       media spend. Forward-looking for Slice 4 ROAS.
 -- ============================================================================
-CREATE TABLE IF NOT EXISTS dim_date (
-  date_key                INT       NOT NULL  COMMENT 'YYYYMMDD format, PK',
-  date_value              DATE      NOT NULL  COMMENT 'Actual calendar date',
-
-  -- Basic components
-  year                    INT       NOT NULL,
-  quarter                 INT       NOT NULL  COMMENT '1-4',
-  month                   INT       NOT NULL,
-  month_name              STRING    NOT NULL  COMMENT 'January, February, ...',
-  day_of_month            INT       NOT NULL,
-  day_of_year             INT       NOT NULL,
-
-  -- ISO 8601 (Monday-based weeks)
-  iso_year                INT       NOT NULL,
-  iso_week                INT       NOT NULL  COMMENT '1-53, Monday-based',
-  iso_day_of_week         INT       NOT NULL  COMMENT '1=Mon, ..., 7=Sun',
-  iso_year_week           STRING    NOT NULL  COMMENT 'YYYY-W## display format',
-  iso_week_start_date     DATE      NOT NULL  COMMENT 'Monday of this week',
-  iso_week_end_date       DATE      NOT NULL  COMMENT 'Sunday of this week',
-
-  -- Period bookends
-  month_start_date        DATE      NOT NULL,
-  month_end_date          DATE      NOT NULL,
-  quarter_start_date      DATE      NOT NULL,
-  quarter_end_date        DATE      NOT NULL,
-
-  -- Business flags
-  day_name                STRING    NOT NULL  COMMENT 'Monday, Tuesday, ...',
-  is_weekend              BOOLEAN   NOT NULL,
-
-  -- Audit
-  created_at              TIMESTAMP NOT NULL
+CREATE TABLE IF NOT EXISTS dim_channel (
+  channel_key      INT       COMMENT 'Surrogate key. 0 = Unknown catch-all member.',
+  channel_source   STRING    COMMENT 'Triple Whale raw source value — matches TW portal exactly. Default frontend display value.',
+  channel_group    STRING    COMMENT 'Roll-up hierarchy level for executive-level aggregation (Paid Search / Paid Social / Email / ...).',
+  is_paid          BOOLEAN   COMMENT 'TRUE = paid advertising platform with media ad_spend (paid-media ROAS denominator).',
+  is_meta_category BOOLEAN   COMMENT 'TRUE = TW operational meta-category (Non-attributed / Excluded), not a real marketing channel.',
+  _seeded_at       TIMESTAMP COMMENT 'Seed load timestamp.'
 )
 USING DELTA
-COMMENT 'Conformed date dimension, ISO 8601 standard.'
-TBLPROPERTIES ('delta.autoOptimize.optimizeWrite' = 'true');
+COMMENT 'Slice 1 channel dimension. Seeded from triple_whale.attribution_order_click.source. See notebook 02_seed_dim_channel.';
 
 
 -- ============================================================================
