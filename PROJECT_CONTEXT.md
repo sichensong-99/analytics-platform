@@ -277,6 +277,19 @@
   - ❌ 需同步改 DDL 列名 + notebook 02 + 重建表 —— 但 dim_channel 本就要重建(种子值错误),边际成本为零
 - **关键词**:Dimensional Roll-up Hierarchy / Drill-down Path Design / Schema Semantics Refactoring
 - **取代**:本决策取代 Decision 15 v1 对第二列的定位。
+
+### Decision 22:订单类型业务规则物化为 `is_sales_attributable` flag
+- **日期**:2026-05-22
+- **背景**:Day 5 reconciliation 发现新平台比 Panoply 系统性高 ~3%。根因是 Panoply 的 channel 销售 report 在源头用 4 道 WHERE 过滤排除了换货 / 退款 / exchange(`%EXC%`)/ Returnly-tag 退货订单。Leader 明确:channel 销售分析不应含 refund/replacement(replacement 会重复计数,return 会虚低)。
+- **结论**:不在每个查询里散落复刻这 4 道过滤(Panoply 老做法,易写漏、口径不一致),而是在 `fact_orders_line` 物化一个 `is_sales_attributable` 布尔列,把"这一行算不算 channel-attributable 销售"这个业务语义集中编码一次。reconciliation / metrics API / 未来的 refunds report 统一消费同一个 flag。原始全量数据保留,只打标不删除。
+- **Trade-off**:
+  - ✅ Single source of truth — 业务规则一处定义,杜绝 Panoply 那种"某个 report 忘加 Returnly 过滤"的口径漂移
+  - ✅ 原始数据不丢,毛/净销量两种口径都可算;退货 report 直接用 `is_sales_attributable = FALSE`
+  - ✅ 简历素材:business rule 下沉数据层 / 多源业务规则统一建模
+  - ❌ 第一版无法 100% 复刻:换货表(Replacements_news)、退款表(refund1_news)、Shopify `tags`(Returnly)均未接入 Databricks,需先补 ingestion
+  - ⚠️ 当前 reconciliation 用查询级近似(`%EXC%` + `is_refunded`)替代,残差 ~2% 已文档化归因
+- **关键词**:Business Rule Materialization / Single Source of Truth / Semantic Layer / BI Logic Decoupling
+- **状态**:已决策,待落地(列入 Slice 1 收尾 / Slice 3 backlog)
 ---
 
 ## 6. 项目仓库
