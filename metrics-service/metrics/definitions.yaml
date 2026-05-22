@@ -1,5 +1,5 @@
 # ====================================================
-# Metric Definitions (Phase 2A: with mock SQL)
+# Metric Definitions
 # ====================================================
 # Each metric includes:
 # - version: semantic version (v1.0, v1.1, ...)
@@ -166,17 +166,17 @@ metrics:
         change: "Initial version"
         breaking: false
 
-# ===========================================
+  # ===========================================
   # Slice 1: Sales × Marketing Cross-cut (PBI Migration)
   # Migrated from legacy Panoply `Style_selling_df`
   # See: docs/existing_data_inventory.md §5.1
   # ===========================================
   quantity_by_style_channel_week:
-    version: v1.0
+    version: v1.1
     status: active
     owner: sia
     created_at: "2026-05-19"
-    updated_at: "2026-05-19"
+    updated_at: "2026-05-21"
 
     name: "Quantity by Style × Channel × Week"
     description: "Weekly units sold sliced by product style and marketing channel, replacing PBI Style_selling_df page."
@@ -184,7 +184,7 @@ metrics:
       Sum of order line quantity at row grain.
       Includes all orders (refunds/replacements not excluded — front-end can toggle via is_refunded flag in fact_orders_line).
       Channel source: Triple Whale `channel_source` (post-2025-09 complete).
-      Legacy `legacy_channel_group` field preserves GA4-style grouping for stakeholder continuity.
+      `channel_group` is the dimension roll-up hierarchy level (Paid Search / Paid Social / Email / ...).
       Date grain: ISO 8601 year-week (Mon-Sun).
       Currency: N/A (count).
     unit: count
@@ -213,7 +213,7 @@ metrics:
         - season
       channel:
         - channel_source
-        - legacy_channel_group
+        - channel_group
     filters:
       required:
         - start_date
@@ -232,7 +232,7 @@ metrics:
       raw_sources:
         - shopify_32degrees.order
         - shopify_32degrees.order_line
-        - mvdev_federated_catalog.triple_whale.attribution_order
+        - mvdev_federated_catalog.triple_whale.attribution_order_click
         - analytics_platform_32degrees.raw_uploads/ers_monthly
 
     sql: |
@@ -243,7 +243,7 @@ metrics:
         p.item_description,
         p.season,
         c.channel_source,
-        c.legacy_channel_group,
+        c.channel_group,
         SUM(f.quantity) AS value
       FROM mvdevdatabricks.analytics_platform_32degrees.fact_orders_line f
       JOIN mvdevdatabricks.analytics_platform_32degrees.dim_date d
@@ -257,7 +257,7 @@ metrics:
         AND (:seasons IS NULL OR p.season IN (:seasons))
         AND (:styles IS NULL OR p.vend_id IN (:styles))
       GROUP BY d.iso_year, d.iso_week, p.vend_id, p.item_description, p.season,
-               c.channel_source, c.legacy_channel_group
+               c.channel_source, c.channel_group
       ORDER BY d.iso_year, d.iso_week, c.channel_source
 
     params:
@@ -270,5 +270,9 @@ metrics:
     changelog:
       - version: v1.0
         date: "2026-05-19"
-        change: "Initial version. Migrated from PBI Style_selling_df page. Replaces GA4 channelgrouping with TW channel_source (dual-display: legacy_channel_group preserves PBI cognitive continuity)."
+        change: "Initial version. Migrated from PBI Style_selling_df page."
+        breaking: false
+      - version: v1.1
+        date: "2026-05-21"
+        change: "Renamed legacy_channel_group -> channel_group to match dim_channel v2.0 (Decision 21). Corrected raw source attribution_order -> attribution_order_click."
         breaking: false
