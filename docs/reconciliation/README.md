@@ -104,6 +104,31 @@ Summed in the worst case, ~10% variance can be entirely "expected." Anything abo
 that signals real drift worth investigating.
 
 ---
+---
+
+## Variance attribution (Slice 1, 2025-07-07..13 window)
+
+Initial reconciliation showed a +3.17% systematic positive bias (new platform
+higher). Root cause was traced — **not a data error** — to four order-class
+exclusions baked into the legacy Panoply report that the new platform does not
+yet replicate:
+
+| Legacy exclusion | New-platform status |
+|---|---|
+| Exchange orders (`name LIKE '%EXC%'`) | Reproducible — applied in reconciliation query 1 |
+| Refunded orders (`refund1_news`) | Partially reproducible via `is_refunded` flag |
+| Replacement orders (`Replacements_news`) | Not yet — source table not ingested |
+| Returnly-tagged returns (`tags LIKE '%returnly%'`) | Not yet — Shopify `tags` not in Fivetran feed |
+
+After applying the two reproducible filters, residual variance narrows to ~2%,
+attributable to the two not-yet-reproducible classes.
+
+**Resolution path**: rather than scatter four `WHERE NOT IN` filters across every
+query (the legacy approach), the business rule will be materialized once as an
+`is_sales_attributable` flag on `fact_orders_line` — a single source of truth
+consumed uniformly by reconciliation, the metrics API, and the future refunds
+report. Tracked as a backlog item; requires ingesting replacement/refund source
+tables and Shopify `tags` via Fivetran.
 
 ## How to run
 
