@@ -74,7 +74,7 @@ COLOR_FAIL = "FFC7CE"      # light red
 COLOR_MISSING = "FFD9B3"   # light orange
 COLOR_HEADER = "BDD7EE"    # light blue
 
-JOIN_KEYS = ["iso_year", "iso_week", "vend_id", "legacy_channel_group"]
+JOIN_KEYS = ["iso_year", "iso_week", "vend_id"]
 
 
 # =============================================================================
@@ -105,7 +105,6 @@ def load_csv(path: Path, qty_col: str) -> pd.DataFrame:
     df["iso_year"] = df["iso_year"].astype(int)
     df["iso_week"] = df["iso_week"].astype(int)
     df["vend_id"] = df["vend_id"].astype(str).str.strip()
-    df["legacy_channel_group"] = df["legacy_channel_group"].astype(str).str.strip()
     df[qty_col] = pd.to_numeric(df[qty_col], errors="coerce").fillna(0).astype(int)
 
     return df[required]
@@ -233,8 +232,8 @@ def _write_summary_sheet(ws, summary: dict) -> None:
     ws["A1"].font = Font(bold=True, size=16)
     ws["A2"] = f"Generated: {summary['generated_at']}"
     ws["A3"] = (
-        f"Grain: iso_year × iso_week × vend_id × legacy_channel_group  |  "
-        f"Window: last 7 complete days"
+        f"Grain: iso_year × iso_week × vend_id  |  "
+        f"Window: 2025-07-07 .. 2025-07-13"
     )
 
     # Status breakdown table
