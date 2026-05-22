@@ -1,16 +1,42 @@
 ## 🟢 当前状态(2026-05-21 收盘)— 新 chat 必读
 
-**项目位置**:Phase 2B/3 — Slice 1 垂直切片,Day 3 完成
-**Day 3 结果**:fact_orders_line 全量重建成功,9,965,352 行写入
-**下一步**:Day 4 — FastAPI databricks_client 从 mock 换成真实 SQL Warehouse 连接
+**项目位置**:Phase 2B/3 — Slice 1 垂直切片,Day 4 完成
+**Day 4 结果**:FastAPI metrics-service 从 mock 切换为真连 Databricks SQL Warehouse(OAuth U2M),
+`quantity_by_style_channel_week` 指标全链路打通(Lakehouse → Metric Layer → API,200 OK,返回真实数据)。
+收尾验证完成:无筛选 + 带 channels 筛选两种调用均返回真实数据,IN 子句修复确认生效。
+**下一步**:Day 5 — Next.js 前端 wire-up + reconciliation 对账 + Leader demo
 
-### Slice 1 四张表进度
+### Slice 1 四张表进度(全部完成)
 | 表 | Notebook | 状态 | 行数 |
 |---|---|---|---|
 | `dim_date` | 01 | ✅ 已建 | 2,922 |
 | `dim_channel` | 02 | ✅ 重建完成(v2.0 真实种子值) | 23 |
 | `dim_product` | 03 | ✅ 已建 | 36,680 |
-| `fact_orders_line` | 04 | ✅ 已建(全量重建) | 9,965,352 |
+| `fact_orders_line` | 04 | ✅ 已建(全量重建,5 项验证全过) | 9,965,352 |
+
+### Day 3-4 关键完成事项
+- **Day 3**:notebook 04 channel DQ 卡点解除。dim_channel 种子重建为真实 TW source 值;
+  notebook 04 改用 classic/personal compute(Serverless 不支持 cache → 全 DAG 重算 + heartbeat timeout);
+  加 source normalization 层(emarsys 大小写归一 / google% URL 编码串归一)。
+  最终 channel DQ 0.318% PASS、product DQ 0.000% PASS,996 万行写入成功。
+- **Day 4**:metrics-service 真连 Databricks SQL Warehouse(ServerlessWarehouse)。
+  PAT 被组织禁用 → 改用 OAuth U2M 浏览器登录认证。
+  databricks_client.py 加 connection-mode toggle(databricks/mock 可切换);
+  `_bind_params` 解决两个真连才暴露的问题:date_key 是 BIGINT(date→int yyyyMMdd)、
+  连接器 IN-clause 列表展开不稳(改为服务层受控 SQL 解析 + 引号转义)。
+  definitions.yaml 指标升 v1.1,对齐 dim_channel v2.0 列名(legacy_channel_group→channel_group)。
+
+### Day 5 待办(下个 chat 启动点)
+- Next.js `style-channel-quantity` page 从 mock 改为真连 metrics-service API
+- 跑 reconciliation 脚本对账 Panoply Style_selling_df(< 2% trust gate)
+- Leader demo(H6 demo script)
+
+### 环境备忘(Day 4 配置,新 chat 需知)
+- metrics-service 连 Databricks 用 OAuth(`.env` 里 DATABRICKS_AUTH_TYPE=oauth,无需 PAT)
+- SQL Warehouse:ServerlessWarehouse(http_path 在 .env)
+- 起服务:先激活 .venv,再 `uv run uvicorn app.main:app --reload`(在 metrics-service 目录)
+- 测试 token:`uv run python gen_test_token.py`
+- `.env` 已被 .gitignore 忽略,勿提交
 
 ### 环境就绪情况
 - Databricks schema `mvdevdatabricks.analytics_platform_32degrees` 权限确认:ALL PRIVILEGES + EXTERNAL USE SCHEMA + MANAGE
