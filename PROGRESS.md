@@ -1,10 +1,21 @@
-## 🟢 当前状态(2026-05-21 收盘)— 新 chat 必读
+## 🟢 当前状态(2026-05-22 收盘)— 新 chat 必读
 
-**项目位置**:Phase 2B/3 — Slice 1 垂直切片,Day 4 完成
-**Day 4 结果**:FastAPI metrics-service 从 mock 切换为真连 Databricks SQL Warehouse(OAuth U2M),
-`quantity_by_style_channel_week` 指标全链路打通(Lakehouse → Metric Layer → API,200 OK,返回真实数据)。
-收尾验证完成:无筛选 + 带 channels 筛选两种调用均返回真实数据,IN 子句修复确认生效。
-**下一步**:Day 5 — Next.js 前端 wire-up + reconciliation 对账 + Leader demo
+**项目位置**:Phase 2B/3 — Slice 1 垂直切片,Day 5 基本完成
+**Day 5 结果**:
+- 5.1 ✅ Next.js `style-channel-quantity` page 真连 metrics-service API,端到端打通(KPI 749,575 与 SQL 核对一致)。修复:nested git repo(frontend 并入 monorepo)、OAuth 每请求重认证(改进程内 connection 复用 + 去掉 --reload)、API proxy 防御式解析。
+- 5.2 ✅ Reconciliation 对账完成。week×style 粒度,2025-07-07..13 窗口。差异从初版 3.66% 收敛到 1.97%(< 2% trust gate)。根因完全归因:Panoply 源端 4 道订单过滤(换货/退款/exchange/Returnly),新平台已复刻 EXC + is_refunded 两道,换货表 + Returnly tag 待 Fivetran schema 补充。
+- 5.3 ⏳ Leader demo — 进行中 / 待做
+
+**下一步**:5.3 Leader demo(H6 demo script);之后 Slice 1 收尾 → Slice 2(revenue)
+
+### Day 5 关键产出与发现
+- **对账谜题破解**:初版桶级 FAIL 25%,但 overall 仅 3.66% — 经诊断为 Panoply 源端订单过滤造成的系统性单向偏差(非数据错)。Sia 主动回忆出 Panoply report 的 4 道 WHERE 过滤是破案关键。
+- **trust gate 重定义**:从"95% 桶 < 2%"改为"overall < 2% 且残差完全归因",规避小分母放大的误导。
+- **架构决策待落地**:business rule(refund/replacement 排除)应物化为 fact 表 `is_sales_attributable` flag(single source of truth),取代 Panoply 那种散落 4 处的 WHERE 过滤。列入 backlog,见 Decision 22。
+
+### Slice 1 待收尾项(Day 5 后)
+- [ ] `is_sales_attributable` flag 落地(改 fact schema + notebook 04 + 重跑)— 需先接入 replacement/refund 源表 + Fivetran Shopify `tags`
+- [ ] Demo 反馈消化
 
 ### Slice 1 四张表进度(全部完成)
 | 表 | Notebook | 状态 | 行数 |
