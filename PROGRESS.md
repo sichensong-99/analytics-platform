@@ -1,12 +1,26 @@
-## 🟢 当前状态(2026-05-22 收盘)— 新 chat 必读
+### Day 5 收尾 — 周一待办(2026-05-22 定稿)
+**Day 5 已完成**:5.1 前端真连 API 端到端打通;5.2 reconciliation 对账完成
+(week×style 粒度,2025-07-07~13,差异 1.97% < 2% trust gate,根因完全归因);
+Decision 22 归档(business rule 物化为 is_sales_attributable flag)。
+5.3 Leader demo 待我自己进行。
 
-**项目位置**:Phase 2B/3 — Slice 1 垂直切片,Day 5 基本完成
-**Day 5 结果**:
-- 5.1 ✅ Next.js `style-channel-quantity` page 真连 metrics-service API,端到端打通(KPI 749,575 与 SQL 核对一致)。修复:nested git repo(frontend 并入 monorepo)、OAuth 每请求重认证(改进程内 connection 复用 + 去掉 --reload)、API proxy 防御式解析。
-- 5.2 ✅ Reconciliation 对账完成。week×style 粒度,2025-07-07..13 窗口。差异从初版 3.66% 收敛到 1.97%(< 2% trust gate)。根因完全归因:Panoply 源端 4 道订单过滤(换货/退款/exchange/Returnly),新平台已复刻 EXC + is_refunded 两道,换货表 + Returnly tag 待 Fivetran schema 补充。
-- 5.3 ⏳ Leader demo — 进行中 / 待做
+**周一问 Leader(业务规则,只问这些)**:
+①是否仍用 Returnly  ②所有 replacement 是否一定生成 EXC- 订单(有无不带 EXC- 的补发单)
+③is_sales_attributable 数据层统一标记方向是否认可  ④demo 后问下一个最想看的 dashboard
 
-**下一步**:5.3 Leader demo(H6 demo script);之后 Slice 1 收尾 → Slice 2(revenue)
+**周一自己查(技术问题,查数据即可,不问人)**:
+①Panoply 调 Replacements_news 定义 SQL,确认 EXC- 是否覆盖全部 replacement
+②Databricks 查 order_line_refund/return 表:看表结构(订单级/行级、有无退款数量字段);
+  并用 Panoply 已知退货订单号对一遍,验证该表是否覆盖全部退货(含 Returnly)
+  —— 这就是"如何确认能拿到全部 refund 数据"的方法,无需问任何人。
+
+**已澄清(不用再纠结)**:
+- replacement 排除 = 排除 EXC- 补发单本身,原订单照常计入(Leader 目的:防重复计算)
+- refund 多为部分退款,是行级/数量级调整,与 replacement 整单排除性质不同
+- refund report 与 replacement report 分开做
+
+**下一步**:据 demo 反馈定 —— Slice 1 收尾(落地 is_sales_attributable flag)
+或直接进 Slice 2(revenue page)。
 
 ### Day 5 关键产出与发现
 - **对账谜题破解**:初版桶级 FAIL 25%,但 overall 仅 3.66% — 经诊断为 Panoply 源端订单过滤造成的系统性单向偏差(非数据错)。Sia 主动回忆出 Panoply report 的 4 道 WHERE 过滤是破案关键。
