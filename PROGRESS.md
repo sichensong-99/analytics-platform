@@ -55,6 +55,30 @@
 - ⏳ Demo(H6 demo script,已开始草稿)
 - ⏳ next page: page_view(需 TW Web Analytics 接入,邮件已发)
 
+### Slice 1 量化基线(2026-05-27 freeze)
+
+> 这些数字是 Slice 1 demo 的核心证据,简历 STAR 里的 R(Result)。
+> metafield 落地重跑后会更新,但 baseline 保留作演进对比。
+
+| 指标 | 数值 | 备注 |
+|---|---|---|
+| ETL 行数(slice 1 ETL window 后) | 9,965,352 | Shopify order_line 9.94M 窗口内行 |
+| Shopify order(全量) | 11.45M | 简历:千万级订单规模 |
+| Shopify order_line(全量) | 44.67M | |
+| TW attribution_order_click(全量) | 25.26M | |
+| TW join 匹配率 | 99.72% | unmatched 0.280%,PASS |
+| Channel DQ unmatched | 0.318% | <0.5% PASS,WARN baseline 用 |
+| Product DQ unmatched | 0.000% | PASS |
+| Week 28 net units(新平台) | 180,670 | Decision 22 v3 |
+| Week 28 net units(Panoply 基准) | 183,438 | Style_selling_df |
+| Overall reconciliation diff | −1.51% | < 2% trust gate ✓ |
+| Reconciliation buckets | 221 | vend_id × week |
+| ↳ PASS | 110 (49.77%) | < 2% diff |
+| ↳ WARN | 66 (29.86%) | 2-5% diff |
+| ↳ FAIL | 45 (20.36%) | > 5% diff,小分母放大主导 |
+| 残差归因 | 100% | EXC 2209 + refund 6573 + cancel 803 |
+| Legacy refund 覆盖缺口 | 78% | tag 法 39,382 vs 原生 175,409 单 |
+
 **核心结论**:
 - is_sales_attributable = NOT(is_exc_order OR is_replacement_order),仅管整单排除两类。
 - refund 改为行级净扣减:新增 refunded_quantity 列,净销量 = quantity − refunded_quantity。
