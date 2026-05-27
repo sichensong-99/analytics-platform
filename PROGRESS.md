@@ -1,26 +1,111 @@
-### Day 5 收尾 — 周一待办(2026-05-22 定稿)
-**Day 5 已完成**:5.1 前端真连 API 端到端打通;5.2 reconciliation 对账完成
-(week×style 粒度,2025-07-07~13,差异 1.97% < 2% trust gate,根因完全归因);
-Decision 22 归档(business rule 物化为 is_sales_attributable flag)。
-5.3 Leader demo 待我自己进行。
+### Slice 1 收尾 — 对账通过 trust gate(2026-05-27)
 
-**周一问 Leader(业务规则,只问这些)**:
-①是否仍用 Returnly  ②所有 replacement 是否一定生成 EXC- 订单(有无不带 EXC- 的补发单)
-③is_sales_attributable 数据层统一标记方向是否认可  ④demo 后问下一个最想看的 dashboard
+**对账结果**:
+- Overall −1.51%(180,670 / 183,438),< 2% trust gate ✓
+- 残差完全归因(week 28,基准 D3 验证):
+    EXC 整单 −2,209 + refund 行级 −6,573 + cancel 行级 −803,
+    与新平台减项 7,376 ≈ Panoply 减项 6,705 + 670 偏差完美对上
+- 45 个 vend_id 桶 FAIL 不阻塞:小分母放大 + replacement 未排除,
+  trust gate 重定义为"overall < 2% 且残差完全归因"已达成
 
-**周一自己查(技术问题,查数据即可,不问人)**:
-①Panoply 调 Replacements_news 定义 SQL,确认 EXC- 是否覆盖全部 replacement
-②Databricks 查 order_line_refund/return 表:看表结构(订单级/行级、有无退款数量字段);
-  并用 Panoply 已知退货订单号对一遍,验证该表是否覆盖全部退货(含 Returnly)
-  —— 这就是"如何确认能拿到全部 refund 数据"的方法,无需问任何人。
+**Decision 22 v3 锁定**:
+- is_sales_attributable = NOT(is_exc_order OR is_replacement_order),
+  只管 EXC + replacement 两类整单排除
+- refunded_quantity 行级列 = SUM(order_line_refund.quantity) 覆盖
+  全 restock_type(return / no_restock / cancel / legacy_restock),
+  净销量 = quantity − refunded_quantity
+- cancel 走行级 netting 不单独建订单级 flag —— Shopify 给取消单生成的
+  refund line(restock_type='cancel')天然在行级净扣覆盖范围内
+- is_refunded / is_refund_order 已删
 
-**已澄清(不用再纠结)**:
-- replacement 排除 = 排除 EXC- 补发单本身,原订单照常计入(Leader 目的:防重复计算)
-- refund 多为部分退款,是行级/数量级调整,与 replacement 整单排除性质不同
-- refund report 与 replacement report 分开做
+**Panoply 真口径(读源码定论)**:
+- refund 排除是订单级整单打标剔除(tag 路径 + metafield 路径)
+- 销售链路从未 join refund line items → cancel 无单独处理,被当销量
+- 全订单状态收入(无 financial_status / cancelled_at 过滤)
+- 这解释了 Panoply 与新平台 −1.51% 的方法论差(非误差)
 
-**下一步**:据 demo 反馈定 —— Slice 1 收尾(落地 is_sales_attributable flag)
-或直接进 Slice 2(revenue page)。
+**Panoply 旧报表的精度缺陷(新平台主动修正)**:
+- legacy refund 只通过 tag 反推,覆盖率 ~22%(原生 175,409 单 vs
+  tag 39,382 单)→ 新平台用原生 order_line_refund 全覆盖
+- legacy 不识别 cancel → 取消单的 803 件被当销量
+- 类比 Decision 17 DST bug 修正,文档化为 intentional correction,
+  不追 0% diff
+
+**metafield 状态**:
+- Databricks 同事昨天刚 enabled `order_metafield` table,
+  几小时内可见 → metafield 是独立表(owner_id/key/value 行级),
+  不是 order 表的列(Fivetran 标准 Shopify connector 结构)
+- notebook 04 Section 3b 已改为表存在性自动检测,优雅降级
+- metafield 到位后流程:DESCRIBE order_metafield → 核 schema →
+  重跑 notebook 04 → 重新对账(预期 overall 残差略往下 ~1.6-1.8%)
+
+**本日交付物**:
+- ✅ notebook 04 v3(Section 3b/3c/7/8 + header)— 行级 refund netting + 
+   replacement 优雅降级
+- ✅ 01_new_platform_query.sql v3(SUM(quantity − refunded_quantity) +
+   is_sales_attributable filter)
+- ✅ 02_panoply_legacy_query.sql v3(BigQuery EXTRACT 语法,Sia 自修)
+- ✅ definitions.yaml quantity_by_style_channel_week v1.2(breaking change)
+- ✅ star_schema_ddl.sql v2.0(dim_channel 重复定义清理 + 三表同步实际
+   schema + fact 改为 Decision 22 v3)
+- ✅ run_reconciliation.py 跑通:180,670 vs 183,438 = −1.51% PASS
+
+**待办**:
+- ⏳ metafield 到位 → 重跑 notebook 04 → 重新对账
+- ⏳ Demo(H6 demo script,已开始草稿)
+- ⏳ next page: page_view(需 TW Web Analytics 接入,邮件已发)
+
+**核心结论**:
+- is_sales_attributable = NOT(is_exc_order OR is_replacement_order),仅管整单排除两类。
+- refund 改为行级净扣减:新增 refunded_quantity 列,净销量 = quantity − refunded_quantity。
+  is_refund_order 列废弃(整单排除 refund 经对账证伪:残差 1.97%→6.57%)。
+- 对账(iso_week 28,Panoply 基准 183,438):行级净扣减 = 180,670(−1.51%),方向正确。
+- 偏差 −2,768 已定位:order_line_refund 含 cancel 类(restock_type),旧报表对 cancel
+  无单独处理 → cancel 算不算需看 Panoply 源码确认。
+
+**下一步(新 chat)**:发 Style_selling_dfNEW 全嵌套 + refund1_news + refund4 +
+02_panoply_legacy_query.sql → 确定 Panoply 真实口径 → notebook 04 / 对账 SQL / DDL 三个终版。
+
+**并行待办**:
+- Fivetran 同事:order metafield 同步(replacement 识别);同事提示字段可能在 returns 表,待查。
+- Databricks 同事:TW Web Analytics 表接入(page_view funnel)— 邮件已发。
+- star_schema_ddl.sql 待修(dim_channel 重复定义 + fact 段过时)。
+- Demo 未做。
+
+**Decision 22 需改 v3**:模型从"三类合一 boolean"改为"EXC+replacement 用 boolean,
+refund 用行级 refunded_quantity 列"。
+
+**三类排除信号已查清(replacement / refund / EXC)**:
+- EXC 换货单:`order.name LIKE '%EXC%'` — Databricks 原生可识别(窗口内 53,467 单)
+- refund 退款单:Shopify 原生 `refund` 父表 join order_id(窗口内 175,409 单)。
+  取代 Panoply 的 `tags LIKE '%refund%'` 反推 —— Panoply 同口径仅 39,382 单,
+  证明原生表更全(系统自动生成,不依赖人工打标);抽样 50 单 100% covered。
+- replacement 补发单:依赖 Shopify order metafield(`replace_refund` /
+  `order_issue` / `original_order_if_replaced_`)。**这三个 metafield 未被
+  Fivetran 同步进 Databricks**(order 表无此列,无独立 metafield 表)→
+  已发邮件请 Fivetran 同事开启 order metafield 同步。
+
+**已澄清(更正旧表述)**:
+- replacement 订单号**不含 EXC** —— replacement(补发)/ EXC(换货)/
+  refund(退款)是三类独立订单,report 三类都排除。
+- Returnly **已停用** —— `tags LIKE '%returnly%'` 过滤作废,无需接 Shopify tags。
+- replacement/refund 现在标在 **metafield**,不再用 note/tag。
+- 退货/换货走 Loop(Returnly 替代品),但 Loop 触发的退款仍落 Shopify 原生
+  refund 表,refund 信号不受影响。
+
+**is_sales_attributable 落地策略 —— 分两步**:
+- 第一步(现在):`fact_orders_line` 加 `is_sales_attributable` 列,实现
+  EXC + refund 两类;notebook 04 预留 replacement 接口 + TODO 注释。
+- 第二步(metafield 到位后):补 replacement,重跑 notebook 04。
+
+**下一个 dashboard:page_view report**:
+- 销售侧(Units Sold / Net Sales / Unique Orders)— Databricks 现有数据可建。
+- funnel 侧(item view / add to cart / 分渠道 session)— 来自 GA4,
+  Databricks **无任何 GA4 ingestion**(现有临时表是手动上传的一周数据)→
+  需新接 GA4(待与 ingestion 同事确认)。
+
+**待 Leader 确认**:is_sales_attributable 数据层统一标记方向(Q③);
+demo 反馈 + 下一个想看的 dashboard(Q④)。
 
 ### Day 5 关键产出与发现
 - **对账谜题破解**:初版桶级 FAIL 25%,但 overall 仅 3.66% — 经诊断为 Panoply 源端订单过滤造成的系统性单向偏差(非数据错)。Sia 主动回忆出 Panoply report 的 4 道 WHERE 过滤是破案关键。
