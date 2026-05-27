@@ -24,6 +24,17 @@
 # MAGIC - Combines DQ metrics into one aggregation.
 # MAGIC - Caches `fact_raw` before DQ and write.
 # MAGIC - Uses `NUM_WRITE_PARTITIONS = 32`, suitable for small Personal Compute.
+# MAGIC
+# MAGIC **v3 (2026-05-27) — corrected exclusion model (Decision 22 v3)**
+# MAGIC - is_sales_attributable = NOT (is_exc_order OR is_replacement_order).
+# MAGIC   Refund is NO LONGER an order-level exclusion — order-level refund
+# MAGIC   exclusion was disproven by Day-5 reconciliation (residual 1.97%->6.57%).
+# MAGIC - Adds `refunded_quantity` — line-level SUM(order_line_refund.quantity)
+# MAGIC   over ALL restock types (return / no_restock / cancel). Net units =
+# MAGIC   quantity - refunded_quantity.
+# MAGIC - Drops `is_refunded` and `is_refund_order` (rejected order-level model).
+# MAGIC - is_replacement_order: graceful auto-detection of the Shopify order
+# MAGIC   metafield; degrades to FALSE until Fivetran syncs it.
 
 # COMMAND ----------
 
@@ -97,9 +108,15 @@ print("[INFO] Loading source tables ...")
 orders = spark.table(f"{SHOPIFY_CATALOG}.{SHOPIFY_SCHEMA}.order").alias("o")
 order_lines = spark.table(f"{SHOPIFY_CATALOG}.{SHOPIFY_SCHEMA}.order_line").alias("ol")
 
-aoc = spark.table(
-    f"{TW_CATALOG}.{TW_SCHEMA}.{TW_ATTRIBUTION_CLICK_TABLE}"
-).alias("aoc")
+# Shopify line-level refund detail — one row per refunded order line.
+# Used in section 3c to build refunded_quantity (line-level net deduction).
+# REPLACES the previous `refund` parent-table load: refunds are now netted at
+# line grain, NOT excluded at order grain (Decision 22 v3).
+order_line_refund = spark.table(
+    f"{SHOPIFY_CATALOG}.{SHOPIFY_SCHEMA}.order_line_refund"
+).alias("olr")
+
+aoc = spark.table(f"{TW_CATALOG}.{TW_SCHEMA}.{TW_ATTRIBUTION_CLICK_TABLE}").alias("aoc")
 
 dim_date = spark.table(DIM_DATE).alias("dd")
 dim_product = spark.table(DIM_PRODUCT).alias("dp")
@@ -150,6 +167,143 @@ ol_filtered = ol_with_date.filter(
 
 print("[INFO] Shopify order lines filtered to ETL window")
 
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 3b. Order-level exclusion flags — `is_sales_attributable` (Decision 22)
+# MAGIC
+# MAGIC Materializes the "should this row count as channel-attributable sales?"
+# MAGIC business rule once at the data layer, instead of re-filtering refund /
+# MAGIC replacement / EXC orders in every downstream query.
+# MAGIC
+# MAGIC Three independent exclusion signals (Leader-confirmed: refund / replacement
+# MAGIC / EXC are three separate order types, all excluded from channel sales):
+# MAGIC
+# MAGIC | Flag | Signal | Status |
+# MAGIC |---|---|---|
+# MAGIC | `is_exc_order` | `order.name` contains `EXC` | Native, ready |
+# MAGIC | `is_refund_order` | order in Shopify native `refund` parent table | Native, ready |
+# MAGIC | `is_replacement_order` | Shopify order metafield (`replace_refund` ...) | PLACEHOLDER — pending Fivetran metafield sync |
+# MAGIC
+# MAGIC `is_sales_attributable` = NOT (exc OR refund OR replacement).
+# MAGIC Flags are computed AFTER the ETL-window filter (operate on ~10M rows, not 44M).
+
+# COMMAND ----------
+
+print("[INFO] Building order-level exclusion flags ...")
+
+# ---------------------------------------------------------------------------
+# Decision 22 v3 — corrected exclusion model
+# ---------------------------------------------------------------------------
+# is_sales_attributable handles ONLY whole-order exclusions: EXC + replacement.
+# Refunds are NOT a whole-order exclusion — a refunded order usually still has
+# genuinely-sold lines. Refunds are netted at LINE grain in section 3c via
+# refunded_quantity. (Order-level refund exclusion was disproven by Day-5
+# reconciliation: residual worsened 1.97% -> 6.57%.)
+# ---------------------------------------------------------------------------
+
+# --- EXC: order name contains 'EXC' (case-sensitive). coalesce guards NULL names.
+ol_flagged = ol_filtered.withColumn(
+    "is_exc_order",
+    F.coalesce(F.col("shopify_order_name").like("%EXC%"), F.lit(False)),
+)
+
+# --- replacement: graceful degradation via order_metafield TABLE ----------
+# Fivetran syncs the Shopify order metafield as a SEPARATE table
+# (order_metafield), not as columns on the order table. Each metafield is
+# one row, joined to order via owner_id = order.id.
+#
+# This block auto-detects whether the table is available yet:
+#   * Table present  -> filter rows where key = 'replace_refund' and
+#                       value = '["Replace"]', take distinct owner_id as the
+#                       set of replacement order ids.
+#   * Table absent   -> degrade to FALSE (no crash, no wrong exclusion;
+#                       replacements under-excluded until Fivetran sync).
+# When Fivetran delivers the table, NO code change is needed.
+
+ORDER_METAFIELD_TABLE = f"{SHOPIFY_CATALOG}.{SHOPIFY_SCHEMA}.order_metafield"
+REPLACEMENT_KEY = "replace_refund"
+REPLACEMENT_VALUE = '["Replace"]'
+
+def _table_exists(fq_name: str) -> bool:
+    try:
+        spark.read.table(fq_name).limit(0).count()
+        return True
+    except Exception:
+        return False
+
+_has_mf_table = _table_exists(ORDER_METAFIELD_TABLE)
+
+if _has_mf_table:
+    order_mf = spark.table(ORDER_METAFIELD_TABLE)
+    print(f"[INFO] order_metafield table detected. Columns: {order_mf.columns}")
+
+    repl_order_ids = (
+        order_mf
+        .filter(
+            (F.col("key") == F.lit(REPLACEMENT_KEY))
+            & (F.col("value") == F.lit(REPLACEMENT_VALUE))
+        )
+        .select(F.col("owner_id").alias("_repl_order_id"))
+        .distinct()
+    )
+    ol_flagged = (
+        ol_flagged
+        .join(F.broadcast(repl_order_ids),
+              on=F.col("order_id_hdr") == F.col("_repl_order_id"), how="left")
+        .withColumn("is_replacement_order", F.col("_repl_order_id").isNotNull())
+        .drop("_repl_order_id")
+    )
+    print(f"[INFO] is_replacement_order computed from order_metafield "
+          f"(key='{REPLACEMENT_KEY}', value='{REPLACEMENT_VALUE}')")
+else:
+    ol_flagged = ol_flagged.withColumn("is_replacement_order", F.lit(False))
+    print(f"[WARN] {ORDER_METAFIELD_TABLE} NOT yet available — "
+          f"is_replacement_order defaults to FALSE (graceful degradation; "
+          f"replacements under-excluded until Fivetran sync completes)")
+
+# --- union rule ------------------------------------------------------------
+ol_flagged = ol_flagged.withColumn(
+    "is_sales_attributable",
+    ~(F.col("is_exc_order") | F.col("is_replacement_order")),
+)
+
+print("[INFO] Exclusion flags built: is_exc_order, is_replacement_order, "
+      "is_sales_attributable")
+# MAGIC %md
+# MAGIC ## 3c. Line-level refund netting — `refunded_quantity` (Decision 22 v3)
+# MAGIC
+# MAGIC Refunds netted at order-line grain, not excluded at order grain.
+# MAGIC `refunded_quantity` = SUM of `order_line_refund.quantity` for the line,
+# MAGIC across ALL `restock_type` values (return / no_restock / cancel /
+# MAGIC legacy_restock). Net units = `quantity - refunded_quantity`.
+# MAGIC `restock_type='cancel'` IS included — a cancelled unit is not a sale,
+# MAGIC and line-level netting handles full and partial cancellations correctly.
+print("[INFO] Building line-level refunded_quantity ...")
+
+# One row per refunded order_line. A line can have multiple refund rows
+# (partial refunds, or refund + cancel), so aggregate first.
+refund_by_line = (
+    order_line_refund
+    .where(F.col("olr.order_line_id").isNotNull())
+    .groupBy(F.col("olr.order_line_id").alias("_refund_line_id"))
+    .agg(F.sum(F.col("olr.quantity")).alias("_refunded_qty"))
+)
+
+# Left-join onto the flagged order lines; lines with no refund -> 0.
+# If F.broadcast OOMs on small Personal Compute, drop it and let AQE decide.
+ol_flagged = (
+    ol_flagged
+    .join(F.broadcast(refund_by_line),
+          on=F.col("ol.id") == F.col("_refund_line_id"), how="left")
+    .withColumn(
+        "refunded_quantity",
+        F.coalesce(F.round(F.col("_refunded_qty")), F.lit(0)).cast("int"),
+    )
+    .drop("_refund_line_id", "_refunded_qty")
+)
+
+print("[INFO] refunded_quantity built (all restock types netted at line grain)")
 # COMMAND ----------
 
 # MAGIC %md
@@ -252,7 +406,8 @@ print("[INFO] TW last-touch attribution prepared with normalized source")
 
 print("[INFO] Joining TW attribution onto order lines ...")
 
-ol_tw = ol_filtered.join(
+# NOTE: input is ol_flagged (carries the section 3b exclusion flags), not ol_filtered.
+ol_tw = ol_flagged.join(
     tw_lasttouch_norm,
     on=F.col("ol.order_id").cast("string") == F.col("tw_order_id"),
     how="left",
@@ -347,8 +502,9 @@ fact_raw = (
         F.col("ol.id").cast("string").alias("shopify_line_id"),
         F.col("ol.sku").alias("sku_raw"),
 
-        # Facts
+        # Measures
         F.col("ol.quantity").cast("int").alias("quantity"),
+        F.col("refunded_quantity"),                          # NEW — Decision 22 v3
         F.col("ol.price").cast("decimal(10,2)").alias("pre_tax_price"),
 
         # Attribution metadata
@@ -361,10 +517,11 @@ fact_raw = (
         F.col("adset_id"),
         F.col("ad_id"),
 
-        # Flags
+        # Order status + business-rule flags (Decision 22 v3)
         F.col("financial_status"),
-        F.when(F.col("financial_status") == "refunded", True)
-         .otherwise(False).alias("is_refunded"),
+        F.col("is_exc_order"),
+        F.col("is_replacement_order"),
+        F.col("is_sales_attributable"),
 
         # ISO date fields
         F.col("dd.iso_year"),
@@ -376,10 +533,7 @@ fact_raw = (
     .cache()
 )
 
-# Force materialization once.
-# After this, DQ and write should reuse cached fact_raw.
 materialized_count = fact_raw.count()
-
 print(f"[INFO] fact_raw built and cached: {materialized_count:,} rows")
 
 # COMMAND ----------
@@ -395,14 +549,21 @@ dq_stats = fact_raw.agg(
     F.count("*").alias("total"),
     F.sum(F.when(F.col("channel_key") == 0, 1).otherwise(0)).alias("channel_unknown"),
     F.sum(F.when(F.col("product_key").isNull(), 1).otherwise(0)).alias("product_null"),
+    F.sum(F.when(~F.col("is_sales_attributable"), 1).otherwise(0)).alias("excluded_rows"),
+    F.sum("quantity").alias("gross_units"),
+    F.sum("refunded_quantity").alias("refunded_units"),
 ).first()
 
 total = dq_stats["total"]
 channel_unknown = dq_stats["channel_unknown"]
 product_null = dq_stats["product_null"]
+excluded_rows = dq_stats["excluded_rows"]
+gross_units = dq_stats["gross_units"]
+refunded_units = dq_stats["refunded_units"]
 
 channel_unknown_pct = channel_unknown / total if total > 0 else 0
 product_null_pct = product_null / total if total > 0 else 0
+excluded_pct = excluded_rows / total if total > 0 else 0
 
 print(f"[INFO] Total fact rows before write: {total:,}")
 print(f"[INFO] channel DQ — unknown: {channel_unknown:,} ({channel_unknown_pct:.3%})")
@@ -411,58 +572,44 @@ print(f"[INFO] product DQ — unmatched: {product_null:,} ({product_null_pct:.3%
 # --- Channel DQ ---
 if channel_unknown_pct >= DQ_CHANNEL_FAIL_PCT:
     print("[INFO] Top unknown channel source values:")
-
     fact_raw.filter(F.col("channel_key") == 0) \
         .groupBy("tw_channel_source", "channel_source_norm") \
-        .count() \
-        .orderBy(F.desc("count")) \
-        .show(30, truncate=False)
-
+        .count().orderBy(F.desc("count")).show(30, truncate=False)
     raise AssertionError(
         f"[FAIL] Channel match rate below SLO: {channel_unknown_pct:.3%} unmatched "
-        f"(threshold: {DQ_CHANNEL_FAIL_PCT:.1%}). "
-        f"Check dim_channel seed and TW source values."
+        f"(threshold: {DQ_CHANNEL_FAIL_PCT:.1%}). Check dim_channel seed and TW source values."
     )
-
 elif channel_unknown_pct >= DQ_CHANNEL_WARN_PCT:
-    print(
-        f"[WARN] Channel unmatched rate {channel_unknown_pct:.3%} exceeds WARN "
-        f"threshold {DQ_CHANNEL_WARN_PCT:.1%} — investigate but pipeline continues."
-    )
-
+    print(f"[WARN] Channel unmatched rate {channel_unknown_pct:.3%} exceeds WARN "
+          f"threshold {DQ_CHANNEL_WARN_PCT:.1%} — investigate but pipeline continues.")
 else:
-    print(
-        f"[PASS] Channel DQ — {channel_unknown_pct:.3%} unmatched "
-        f"below WARN threshold"
-    )
+    print(f"[PASS] Channel DQ — {channel_unknown_pct:.3%} unmatched below WARN threshold")
 
 # --- Product DQ ---
 if product_null_pct >= DQ_PRODUCT_FAIL_PCT:
     print("[INFO] Top unmatched product SKU values:")
-
     fact_raw.filter(F.col("product_key").isNull()) \
-        .groupBy("sku_raw") \
-        .count() \
-        .orderBy(F.desc("count")) \
-        .show(30, truncate=False)
-
+        .groupBy("sku_raw").count().orderBy(F.desc("count")).show(30, truncate=False)
     raise AssertionError(
         f"[FAIL] Product match rate below SLO: {product_null_pct:.3%} unmatched "
-        f"(threshold: {DQ_PRODUCT_FAIL_PCT:.1%}). "
-        f"Check dim_product SKU coverage vs Shopify order_line.sku."
+        f"(threshold: {DQ_PRODUCT_FAIL_PCT:.1%}). Check dim_product SKU coverage."
     )
-
 elif product_null_pct >= DQ_PRODUCT_WARN_PCT:
-    print(
-        f"[WARN] Product unmatched rate {product_null_pct:.3%} exceeds WARN "
-        f"threshold {DQ_PRODUCT_WARN_PCT:.1%} — investigate but pipeline continues."
-    )
-
+    print(f"[WARN] Product unmatched rate {product_null_pct:.3%} exceeds WARN "
+          f"threshold {DQ_PRODUCT_WARN_PCT:.1%} — investigate but pipeline continues.")
 else:
-    print(
-        f"[PASS] Product DQ — {product_null_pct:.3%} unmatched "
-        f"below WARN threshold"
-    )
+    print(f"[PASS] Product DQ — {product_null_pct:.3%} unmatched below WARN threshold")
+
+# --- Sales-model summary (informational only — not a gate) ---
+net_units = gross_units - refunded_units
+print(f"[INFO] gross units: {gross_units:,} | refunded units (line-level, all "
+      f"restock types): {refunded_units:,} | net units: {net_units:,}")
+print(f"[INFO] is_sales_attributable=FALSE rows (EXC + replacement): "
+      f"{excluded_rows:,} ({excluded_pct:.3%})")
+print("[INFO] Exclusion breakdown by reason:")
+fact_raw.groupBy(
+    "is_exc_order", "is_replacement_order", "is_sales_attributable"
+).count().orderBy(F.desc("count")).show(truncate=False)
 
 # COMMAND ----------
 
@@ -544,6 +691,10 @@ print(f"\n[OK] fact_orders_line full rebuild completed — {total:,} rows prepar
 # MAGIC | TW attribution | Last-touch dedup via `position DESC`, `click_date DESC` |
 # MAGIC | Channel normalization | `emarsys` → `Emarsys`; `google%...` → `google-ads`; others unchanged |
 # MAGIC | Channel fallback | `channel_key = 0` for unmatched channel values |
+# MAGIC | Sales exclusion — is_sales_attributable = NOT(EXC OR replacement)
+# MAGIC | EXC signal | `order.name LIKE '%EXC%'` (native) |
+# MAGIC | Refund — line-level netting via refunded_quantity (all restock types)
+# MAGIC | Replacement signal | PLACEHOLDER — pending Fivetran order metafield sync |
 # MAGIC | DQ SLO | Multi-tier PASS/WARN/FAIL |
 # MAGIC | Performance | Cached `fact_raw`, single TW stats aggregation, single DQ aggregation, 32 write partitions |
 # MAGIC | Compute | Classic / Personal Compute |
