@@ -1,242 +1,312 @@
 # Internal Analytics Platform — Roadmap
 
-> Last updated: 2026-04-28
-> Current phase: **Phase 2A 完成,等数据期间(Track 1/2/3 并行)**
+> Last updated: 2026-05-27
+> Current phase: **Slice 1 complete · Awaiting `order_metafield` for replacement-exclusion rerun · Slice 2 starting**
 
 ---
 
-## 🗺 整体 Schedule 流程图
+## 🗺 Delivery Method — Vertical Slice (Decision 10)
 
-现在 ──┐
-│
-├─ 等 Databricks 数据期间(并行 3 件事)
-│   ├── Track 1:PBI 数据源盘点
-│   ├── Track 2:目标 schema 设计文档
-│   └── Track 3:数据质量框架代码骨架
-│
-▼
-Phase 2B/3:Databricks 数仓建模(数据来后)
+The original plan was waterfall: build every ODS/DWD/DWS layer, then services,
+then frontend. **Decision 10 replaced that with vertical slicing** — each slice
+delivers one PBI page end-to-end (data source → Kimball model → metrics service
+→ frontend portal) so Leader sees real output early and join-logic errors
+surface immediately.
+Phase 1 ✅ ── Phase 2A ✅ ──┐
 │
 ▼
-Phase 2C:对接真实数据
+┌─────────────────────────────┐
+│   Vertical Slices           │
+│   each = one PBI page       │
+│   end-to-end                │
+├─────────────────────────────┤
+│   Slice 1 ✅  Style × Channel│
+│   Slice 2 🔜  Revenue        │
+│   Slice 3 📋  Refunds        │
+│   Slice 4 📋  ROAS           │
+└─────────────────────────────┘
 │
 ▼
-Phase 4:调度 + 数据质量框架落地
+Phase 4 (orchestration + DQ gates, designed)
 │
 ▼
-Phase 4.5:⭐ 实时模块(渠道异常监控)
+Phase 4.5 ⭐ Streaming (real-time anomaly, designed)
 │
 ▼
-Phase 5:Redis + Catalog + Lineage
+Phase 5 (Redis + catalog + lineage)
 │
 ▼
-Phase 6:上线 + 文档 + 成本核算
+Phase 6 (deployment + docs + cost ROI)
 │
 ▼
-✅ 项目完成 → 投简历 → 准备面试
----
-
-## Phase Overview
-Phase 1 ✅ → Phase 2A ✅ → 等数据(Track 1/2/3) ⏳ → Phase 2B/3 →
-Phase 2C → Phase 4 → Phase 4.5 (实时) → Phase 5 → Phase 6
-**总周期**:11-15 周(约 3-4 个月)
+✅ Project complete → CV submission → Interview prep
+**Total horizon**: 11-15 weeks (~3-4 months)
 
 ---
 
-## Phase 1:Portal MVP ✅
+## Phase 1 — Portal MVP ✅
 
-**Status**: ✅ Completed
+**Status**: Completed
 
-- [x] Next.js + TypeScript + Tailwind 项目骨架
-- [x] JWT-based 登录(httpOnly cookie)
-- [x] Dashboard 列表页 + 详情页
-- [x] ECharts 图表(line, bar)
-- [x] CSV 导出
-- [x] Mock 数据按 Data Contract schema 设计
-- [x] Data Contract 文档(Shopify, Triple Whale)
+- [x] Next.js + TypeScript + Tailwind scaffolding
+- [x] JWT auth (httpOnly cookie, shared secret across services)
+- [x] Dashboard list + detail pages
+- [x] ECharts (line, bar)
+- [x] CSV export
+- [x] Mock data shaped to Data Contract schemas
+- [x] Data Contract docs (Shopify, Triple Whale)
 
-**简历素材**:全栈交付能力 + Data Contract 工程实践
-
----
-
-## Phase 2A:Metrics Service Skeleton ✅
-
-**Status**: ✅ Completed
-
-- [x] FastAPI 项目结构 + uv 依赖管理
-- [x] YAML 指标定义(4 个指标:revenue/aov/roas/ad_spend)
-- [x] 指标 versioning + changelog
-- [x] YAML loader + 缓存
-- [x] JWT 鉴权(共享 secret with Next.js)
-- [x] Mock Databricks client(可替换接口)
-- [x] CORS 配置
-- [x] FastAPI 自动 docs(/docs)
-- [x] Next.js 改造为通过 FastAPI 取数
-
-**简历素材**:数据服务化 + 指标平台 + Versioned Metrics
+**Resume signal**: Full-stack delivery · Data Contract engineering discipline
 
 ---
 
-## ⏳ 等数据期间(并行 Track)
+## Phase 2A — Metrics Service Skeleton ✅
 
-**目标**:Databricks 数据进来前,把所有"前置准备"都做好。
+**Status**: Completed
 
-### Track 1:PBI 数据源盘点(1-2 天)
-- [ ] 打开 PBI report,查看 Power Query 数据源
-- [ ] 记录已有的 catalog.schema.table 名字
-- [ ] 验证查询权限
-- [ ] 写 `docs/existing_data_inventory.md`
+- [x] FastAPI structure + uv dependency management
+- [x] YAML metric definitions (`revenue_by_day` / `aov_by_day` /
+      `roas_by_channel` / `ad_spend_by_day` baseline)
+- [x] Metric versioning + changelog discipline
+- [x] YAML loader + caching
+- [x] JWT auth (shared secret with Next.js)
+- [x] Mock Databricks client (swappable interface)
+- [x] CORS + FastAPI auto docs (`/docs`)
+- [x] Next.js refactor to consume FastAPI
 
-### Track 2:目标 Schema 设计(2-3 天)
-- [ ] 反推 PBI dashboard 需要的 fact + dim 表
-- [ ] mermaid 画星型模型 ER 图
-- [ ] SCD 类型决定(Type 1 / Type 2)
-- [ ] 写 `docs/data_modeling/sales_star_schema.md`
-
-### Track 3:数据质量框架骨架(2-3 天)
-- [ ] YAML 驱动的 DQ 框架代码
-- [ ] 检查类型:not_null / unique / range / freshness
-- [ ] 写在 `metrics-service/data_quality/`
-- [ ] Phase 4 落地时直接用
+**Resume signal**: Data Serving Layer · Metric Platform · Versioned Metrics
 
 ---
 
-## Phase 2B/3:Databricks 数仓建模 ⏳
+## Pre-Slice Preparation Tracks ✅
 
-**Status**: 等数据,数据来后启动
-**预计**:3-4 周
+Originally planned as a parallel "wait for data" period. **All three tracks
+completed** before / during Slice 1:
 
-- [ ] ODS 层:`ods.shopify_orders_raw`, `ods.triplewhale_attribution_raw`
-- [ ] DWD 层(维度建模):
-  - [ ] `dwd.fact_orders`
-  - [ ] `dwd.fact_attribution`
-  - [ ] `dwd.dim_customer`
-  - [ ] `dwd.dim_product`
-  - [ ] `dwd.dim_date`
-  - [ ] `dwd.dim_channel`
-  - [ ] `dwd.dim_style`
-- [ ] DWS 层:`dws.daily_revenue`, `dws.channel_performance` 等
-- [ ] PySpark notebooks 5 个:
-  - [ ] `01_ods_to_dwd_orders`
-  - [ ] `02_ods_to_dwd_attribution`
-  - [ ] `03_build_dimensions`
-  - [ ] `04_dwd_to_dws_revenue`
-  - [ ] `05_dwd_to_dws_channel`
-- [ ] Shopify + Triple Whale 跨源整合(`dwd.fact_orders_with_attribution`)
-
-**简历素材**:数仓分层 + Kimball 维度建模 + PySpark ETL + 多源整合
+- [x] **Track 1** — PBI data source inventory → `docs/existing_data_inventory.md`
+      (with §5.1 Style-channel page mapping)
+- [x] **Track 2** — Target star schema → `docs/data_modeling/star_schema_ddl.sql`
+      (now v2.0, synced to production tables)
+- [x] **Track 3** — DQ framework skeleton → `metrics-service/data_quality/`
+      (YAML-driven: not_null / unique / range / freshness)
 
 ---
 
-## Phase 2C:对接真实数据 ⏳
+## Slice 1 — Style × Channel Quantity ✅
 
-**预计**:1 周
+**Status**: Completed 2026-05-27
+**Duration**: ~9 days (Day 1-5 planned + Day 6-9 reconciliation iteration)
+**PBI page replaced**: `Style-channel (quantity)`
 
-- [ ] YAML 指标 SQL 改写为查 DWS 真表
-- [ ] `databricks_client.py` 替换 mock 为真实 SQL connector
-- [ ] 端到端测试:Next.js → FastAPI → Databricks → 真数据
+### Deliverables
+- [x] `fact_orders_line` Delta table — 9.97M rows, partitioned by ISO week
+- [x] 3 conformed dimensions (`dim_date` 2,922 / `dim_channel` 23 / `dim_product` 36,680)
+- [x] 4 PySpark notebooks (`01_build_dim_date` / `02_seed_dim_channel`
+      / `03_build_dim_product` / `04_build_fact_orders_line`)
+- [x] `quantity_by_style_channel_week` v1.2 YAML metric
+      (net units, Decision 22 v3 semantics)
+- [x] FastAPI metrics service live-connected to Databricks SQL Warehouse (OAuth U2M)
+- [x] Next.js `style-channel-quantity` page wired to live API
+- [x] Reconciliation tooling — Panoply BigQuery query + Databricks query
+      + Python diff + Excel report
+- [x] DDL synced to production tables (`star_schema_ddl.sql` v2.0)
+- [x] Slice 1 completion summary (`docs/architecture/slice_1_completion_summary.md`)
 
-**简历素材**:全链路打通
+### Quantified results
+| Metric | Value |
+|---|---|
+| ETL row count (window) | 9,965,352 |
+| TW join match rate | 99.72% |
+| Channel DQ unmatched | 0.318% (PASS, baseline 0.15%) |
+| Product DQ unmatched | 0.000% (PASS) |
+| Reconciliation overall diff | **−1.51%** (< 2% trust gate ✓) |
+| Reconciliation buckets | 221 (PASS 49.77% / WARN 29.86% / FAIL 20.36%) |
+| Residual itemization | 100% (EXC 2,209 + refund 6,573 + cancel 803) |
+
+### Architectural decisions locked
+Decision 10 (Vertical Slice) · 11 (ISO 8601) · 12 (SCD1 YAGNI) · 13 (Schema-ETL decoupling) ·
+14 (Meta-category explicit) · 15→21 (`channel_group` as roll-up hierarchy) · 16 (`is_paid` forward-looking) ·
+17 (DST-aware timezone) · 18 (Multi-tier DQ SLO) · 19 (ERS dual-schema) ·
+20 (Shared raw zone) · 22 v3 (`is_sales_attributable` + line-level refund netting).
+
+### Open follow-up
+- [ ] `order_metafield` arrives → rerun notebook 04 → activate `is_replacement_order`
+      (predicted residual: −1.51% → ~−1.7%, still within 2% gate)
+- [ ] Leader demo (script drafted in `docs/demo/leader_demo_script.md`)
+
+**Resume signal**: Kimball star schema · Cross-source heterogeneous-type join ·
+Last-touch attribution dedup via window function · Multi-tier DQ SLO ·
+Reconciliation-driven model correction · Materialized business rules ·
+Quantified legacy accuracy gap ·  DST-aware timezone (legacy bug correction)
 
 ---
 
-## Phase 4:调度 + 数据质量 ⏳
+## Slice 2 — Revenue page 🔜
 
-**预计**:1 周
+**Status**: Next up after Leader demo feedback
+**Estimated**: 5-7 days (faster than Slice 1 — fact/dim infra reused)
 
-- [ ] Databricks Workflows DAG(ODS → DWD → DWS)
-- [ ] 失败重试 + 告警(Slack / Email)
-- [ ] 数据质量框架接入(YAML 驱动)
-- [ ] DQ 校验作为 pipeline 的一个 task
-- [ ] 文档:架构图、调度策略
+### Scope
+- Migrate PBI revenue page semantics (gross revenue / net revenue / AOV by channel × week)
+- Add `line_total` / `line_discount` measures to `fact_orders_line` (already in
+  v1.1 DDL forward-looking design — no schema change needed)
+- Optional: introduce order-grain `fact_orders` if channel × date aggregation
+  benchmarks slow on line-grain (Kimball multi-grain modeling)
 
-**简历素材**:数据治理 + Orchestration
+### Carry-over from Slice 1
+- ✅ All 3 dimensions reused as conformed
+- ✅ Reconciliation tooling reused with revenue SQL
+- ✅ Frontend / FastAPI patterns reused
+
+**Resume signal**: Conformed dimensions · Slice-to-slice marginal cost reduction ·
+Multi-grain Kimball modeling (if order-grain fact added)
 
 ---
 
-## 🆕 Phase 4.5:实时模块 ⏳
+## Slice 3 — Refunds page 📋
 
-**预计**:5-7 天
-**详细计划**:见 `docs/streaming_module_plan.md`
+**Estimated**: 7-10 days
 
-**业务**:实时渠道异常监控(ROAS drop)
-**技术**:Databricks Auto Loader + Structured Streaming + Delta Lake
+### Scope
+- Materialize legacy Panoply refund / replacement classification rules
+  (18+ `tag_category` + 3-tier `Responsibility` Warehouse/Shipping/32D)
+  as `dim_refund_reason` lookup tables
+- Build refund-grain fact joining `order_line_refund` + parent `refund` table
+- Replace ~200 lines of hardcoded CASE WHEN with YAML-maintained classification
 
-### P0(3 天)
-- [ ] 模拟数据生成器(orders + ads)
+**Resume signal**: Business rule lookup tables · Refund root-cause attribution model
+
+---
+
+## Slice 4 — ROAS page 📋
+
+**Estimated**: 7-10 days
+
+### Scope
+- Add `fact_attribution_touchpoint` to ingest TW ad-spend data
+- ROAS metric using `is_paid = TRUE` denominator (pre-encoded in `dim_channel`
+  Slice 1 — Decision 16 pays off here)
+- Channel-level paid-media performance dashboard
+
+**Resume signal**: Multi-fact analytics · Forward-looking flag activation ·
+Cross-fact metric construction
+
+---
+
+## Phase 4 — Workflows Orchestration + DQ Gates 📋
+
+**Status**: Fully designed (`docs/architecture/phase4_orchestration_design.md`, ~750 lines)
+**Estimated**: 5-7 days implementation
+
+- [ ] Databricks Workflows DAG (ODS → DWD → DWS per slice)
+- [ ] Retry policy + Slack/Email alerts + success digest
+- [ ] DQ framework as pipeline tasks (DQ-as-Gate pattern)
+- [ ] Staged migration: Full → Incremental load with `updated_at` watermark + 2-day lookback
+- [ ] Idempotency + config-as-code
+
+**Decisions already locked**: Workflows over Airflow (Decision 5, with
+decision-flip conditions documented for interview).
+
+**Resume signal**: Orchestration · DQ-as-Gate · Staged migration with watermark ·
+Multi-channel alerting
+
+---
+
+## Phase 4.5 — Streaming Module ⭐ 📋
+
+**Status**: Fully designed (`docs/streaming_module_plan.md`)
+**Estimated**: 5-7 days
+**Business scope**: Real-time channel anomaly monitoring (ROAS drop)
+
+### P0 (3 days)
+- [ ] Mock data generator (orders + ads streams)
 - [ ] Auto Loader streaming notebook
 - [ ] 5-min sliding window
 - [ ] Channel-level metrics
 - [ ] Simple anomaly rule
 
-### P1(再 2-3 天)⭐ 别漏
+### P1 (additional 2-3 days) ⭐ Don't skip
 - [ ] Stream-stream join
-- [ ] Checkpoint + Exactly-once
-- [ ] Watermark + 乱序处理
-- [ ] dropDuplicatesWithinWatermark
-- [ ] 流批一体(Delta Lake unified)
+- [ ] Checkpoint + Exactly-once semantics
+- [ ] Watermark + late-arriving data handling
+- [ ] `dropDuplicatesWithinWatermark`
+- [ ] Stream-batch unified via Delta Lake
 
-**简历素材**:Streaming + 流批一体 + Exactly-once
-
----
-
-## Phase 5:平台化升级 ⏳
-
-**预计**:1-2 周
-
-- [ ] Redis 缓存层
-- [ ] Metrics Catalog 页面(展示所有指标 + 版本 + 血缘)
-- [ ] 指标血缘可视化(ECharts graph 组件)
-- [ ] 缓存效果量化(查询时间对比)
-
-**简历素材**:平台化 + 性能优化 + 血缘追踪
+**Resume signal**: Structured Streaming · Watermark · Exactly-once · Stream-batch unification
 
 ---
 
-## Phase 6:上线 + 收尾 ⏳
+## Phase 5 — Platform Capabilities 📋
 
-**预计**:1 周
+**Estimated**: 1-2 weeks
 
-- [ ] 部署(Vercel 前端 / 公司服务器后端)
-- [ ] 完整文档(架构图、API 文档、用户指南)
-- [ ] 成本核算报告(PBI 节省 + 缓存优化)
-- [ ] 使用统计(用户数、查询量、热门指标)
-- [ ] 写一篇技术博客
-- [ ] GitHub README 美化(架构图、截图、demo 视频)
+- [ ] Redis cache layer in metrics service (quantified hit rate + cost saving)
+- [ ] Metrics Catalog page (all metrics + version + owner + lineage)
+- [ ] Lineage visualization (ECharts graph)
+- [ ] Cache impact quantification (query latency before/after)
 
-**简历素材**:量化成果 + 项目运营
+**Resume signal**: Platform engineering · Performance optimization · Lineage tracking
 
 ---
 
-## 简历最终版(Phase 6 后)
+## Phase 6 — Deployment + ROI 📋
 
-> **企业内部数据分析平台 / 主导设计与开发** | 2026.04 - 2026.07
-> 
-> 替代 Power BI Service,降低团队订阅成本 $X/年,服务 N 名团队成员
-> 
-> **数据架构**
-> - 在 Databricks Lakehouse 上设计三层数仓(ODS / DWD / DWS),整合 Shopify、Triple Whale 多源异构数据
-> - 基于 Kimball 方法论实现维度建模,产出 fact_orders、dim_product、dim_customer 等核心事实/维度表
-> - 使用 PySpark 实现 ETL pipeline,支持全量与增量更新
-> - 在数据接入前定义跨团队 Data Contract,明确 schema、粒度、质量预期与 SLA
-> 
-> **数据服务层**
-> - 设计并实现统一指标服务(Metrics Service),解耦指标定义与消费逻辑
-> - 基于 YAML 配置驱动的指标 DSL,实现指标口径统一管理,新增指标 0 代码改动
-> - 设计指标版本管理机制(versioned metrics),支持口径变更追踪与 breaking change 标记
-> - FastAPI 提供 RESTful 接口,引入 Redis 缓存,降低 Databricks 查询成本 70%
-> 
-> **数据治理**
-> - 实现指标血缘追踪与可视化,提供影响分析能力
-> - 构建 YAML 驱动的数据质量校验框架(完整性、唯一性、新鲜度等维度)
-> - 使用 Databricks Workflows 编排 pipeline,实现任务依赖、失败重试、告警通知
-> 
-> **流处理**
-> - 基于 Databricks Structured Streaming + Auto Loader 实现实时渠道异常监控
-> - 实现 stream-stream join、watermark 乱序处理、exactly-once 语义
-> - Delta Lake 流批一体存储,统一实时与离线分析
-> 
-> **前端展示**
-> - Next.js + ECharts 实现自助分析门户,支持 dashboard 浏览、指标目录、CSV 导出
-> 
-> **技术栈**:Databricks · PySpark · Spark Structured Streaming · Delta Lake · FastAPI · Next.js · Redis · ECharts · YAML
+**Estimated**: 1 week
+
+- [ ] Deployment (Vercel frontend / company server backend)
+- [ ] Complete documentation (architecture, API, user guide, runbook)
+- [ ] Cost analysis (PBI savings vs Databricks compute + ROI)
+- [ ] Usage stats (DAU, query volume, hot metrics)
+- [ ] Tech blog post
+- [ ] GitHub README polish (architecture diagram, screenshots, demo video)
+
+**Resume signal**: Quantified outcomes · Project operation discipline · Tech writing
+
+---
+
+## Final Resume Draft (post-Phase 6)
+
+> **Internal Data Analytics Platform / Lead Designer & Developer** | 2026.04 – 2026.07
+>
+> Replaced Power BI Service, reducing team subscription cost by $X/year and serving N team members.
+>
+> **Data Architecture**
+> - Designed and delivered Kimball star schema on Databricks Lakehouse via
+>   **vertical-slice methodology** (4 slices, one PBI page each end-to-end)
+> - Integrated Shopify (orders / refunds / replacements), Triple Whale
+>   (attribution), and external ERS / freight data into the Lakehouse,
+>   processing ~10M order lines and ~25M TW attribution events
+> - Implemented business-rule-materialization pattern
+>   (`is_sales_attributable` boolean) replacing scattered legacy WHERE filters
+> - Defined Data Contracts before ingestion, set cross-team schema, quality, SLA expectations
+>
+> **Data Quality & Reconciliation**
+> - Built quantitative reconciliation methodology vs legacy Panoply pipeline,
+>   achieving **−1.51% diff with fully itemized residual attribution**,
+>   identifying and correcting 3 legacy accuracy gaps (DST timezone drift,
+>   22% refund undercoverage, cancelled-orders-counted-as-sales)
+> - Designed multi-tier DQ SLO (PASS / WARN / FAIL) calibrated against
+>   empirical 0.15% baseline, avoiding alert fatigue
+> - Implemented DQ-as-Gate pattern halting pipeline before bad data writes
+>
+> **Metrics Service Layer**
+> - Implemented unified metrics service decoupling metric definition from consumption
+> - YAML-driven metric DSL — new metrics with zero code changes
+> - **Versioned metrics** with breaking-change annotation for semantic shifts
+> - FastAPI REST API + Redis cache reducing Databricks query cost ~70%
+>
+> **Data Governance**
+> - Metric lineage tracking & visualization for impact analysis
+> - YAML-driven data quality framework (completeness / uniqueness / freshness)
+> - Databricks Workflows orchestration with retry, alerting, dependency management
+>
+> **Stream Processing**
+> - Databricks Structured Streaming + Auto Loader for real-time channel anomaly monitoring
+> - Stream-stream join · Watermark late-data handling · Exactly-once semantics
+> - Stream-batch unified storage via Delta Lake
+>
+> **Frontend**
+> - Next.js + ECharts self-service portal — dashboard browsing, metric catalog, CSV export
+>
+> **Stack**: Databricks · PySpark · Spark Structured Streaming · Delta Lake ·
+> FastAPI · Next.js · Redis · ECharts · YAML
