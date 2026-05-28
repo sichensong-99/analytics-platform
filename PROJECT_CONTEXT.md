@@ -142,6 +142,7 @@
 - **结论**:TW 替代 GA4 仅覆盖 attribution(channel × revenue / ROAS / 订单归因),不覆盖 funnel metrics(page view / add to cart / sessions)
 - **影响**:新平台 Phase 2B/3 完成后,需 revisit 数据源边界是否纳入 GA4 / Shopify Analytics 以支持 funnel 分析
 - **关键词**:Data Source Boundary / Attribution vs Funnel / SaaS Platform Capability Mapping
+v2 注(2026-05-26):TW 同事确认 TW Web Analytics 表覆盖 funnel(page view / add to cart / session),TW 对 GA4 的替代范围比原判断更宽;但渠道分组为平台型,与 GA4 功能型 15 类口径不一致,page_view 迁移需做渠道映射。
 
 ### Decision 10:Phase 2B/3 采用 Vertical Slice(垂直切片)方法论交付
 - **日期**:2026-05-18
@@ -290,6 +291,49 @@
   - ⚠️ 当前 reconciliation 用查询级近似(`%EXC%` + `is_refunded`)替代,残差 ~2% 已文档化归因
 - **关键词**:Business Rule Materialization / Single Source of Truth / Semantic Layer / BI Logic Decoupling
 - **状态**:已决策,待落地(列入 Slice 1 收尾 / Slice 3 backlog)
+
+### Decision 22 v2 修订(2026-05-26)
+- **措辞更正**:原文"换货表(Replacements_news)"有误 —— Replacements_news
+  是**补发(replacement)表**,EXC 才是换货单,二者是独立的两类。
+- **三类排除信号最终敲定**:
+  - EXC:`order.name LIKE '%EXC%'`(Shopify 原生)
+  - refund:Shopify 原生 `refund` 父表(system source-of-record,
+    取代 Panoply 的 tag 反推 —— 原生表抓到了 tag 法漏掉的未打标退款)
+  - replacement:Shopify order metafield(`replace_refund` 等三列)
+- **Returnly 停用**:原 trade-off 中"接入 Shopify tags 处理 Returnly"作废。
+- **落地策略调整为增量式**:EXC + refund 先落地(信号已就绪),
+  replacement 待 Fivetran 同步 order metafield 后补。notebook 04 预留接口,
+  缺失信号优雅降级 —— 体现 fault-tolerant pipeline design。
+- **关键词**(新增):Native Object over Tag-Reverse-Engineering /
+  System Source-of-Record / Incremental Signal Integration / Fault-tolerant ETL
+
+  ### Decision 23:Amazon 入库数据作为平台独立 domain,放主 schema 用前缀隔离
+- **日期**:2026-05-28
+- **背景**:Leader 要求把 Panoply 上的 Amazon FBA 入库数据(shipment items +
+  shipments 两个 connector)迁到新平台,每周一更新给 planning 同事。Amazon 数据
+  与 Shopify/TW 无任何业务 join key。放哪里?独立 schema 还是主 schema?
+- **结论**:放主 schema `analytics_platform_32degrees`,用 `amazon_` 表名前缀隔离。
+  不新建独立 schema(无 catalog 级 CREATE SCHEMA 权限,且无必要)。
+- **Trade-off**:
+  - ✅ Amazon 成为平台的一部分,强化"multi-domain 数据平台"叙事
+  - ✅ 与 Slice 1 Kimball 域共享指标服务层 / 前端门户 / DQ 框架 / 调度
+  - ✅ 命名前缀清晰隔离两个无 join key 的 domain —— 不强行塞进同一星型模型
+  - ❌ 同一 schema 下两种建模范式(Kimball star vs Medallion)并存,靠命名约定区分
+- **关键词**:Multi-domain Platform / Prefix-isolated Namespace / Domain Isolation without Schema Proliferation
+
+### Decision 24:Amazon 域用 Medallion(Bronze/Silver/Gold),不用 Kimball
+- **日期**:2026-05-28
+- **背景**:Slice 1 用 Kimball 星型。Amazon 域是否也套星型?
+- **结论**:用 Medallion 分层。Bronze 存 API 原始 JSON(schema-on-read,容忍
+  Amazon 字段新增);Silver 规范化 typed schema(schema-on-write + DQ gate);
+  Gold 做 items⨝shipments 的 receiving summary(复刻 Panoply query model 的 join)。
+- **Trade-off**:
+  - ✅ Medallion 适合"原始 API → 清洗 → 业务视图"的 ingestion 场景,比强套
+    fact/dim 更自然
+  - ✅ 同时展示两种主流建模范式(Kimball + Medallion),简历技术广度
+  - ✅ Bronze 原始留痕 + 90 天 retention 支持 replay
+  - ❌ 团队需理解两套范式;用 README/doc 说明何时用哪种
+- **关键词**:Medallion Architecture / Schema-on-Read Bronze / Schema-on-Write Silver / Replay Window
 ---
 
 ## 6. 项目仓库
