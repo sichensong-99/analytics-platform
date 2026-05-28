@@ -1,3 +1,52 @@
+### 2026-05-28 — Amazon ingestion 基本完成 + Databricks 权限阻塞
+
+**🚫 当前阻塞(最高优先)**:Databricks 账号 entitlement 被撤
+- 工作中突然被登出,重登显示 "no permission to access workspace 2523255732481272"
+- metrics-service 连 SQL Warehouse 报 "This API is disabled for users without
+  databricks-sql-access or workspace-consume entitlements"
+- 已发邮件给 Databricks 管理员请求恢复 Workspace access + Databricks SQL access
+- 这跟代码无关,纯权限事故。恢复前所有连 Databricks 的操作都会失败。
+
+**Amazon shipment ingestion(新增任务,Leader 要求)— 90% 完成**:
+- 背景:把 Panoply 上的 Amazon FBA 入库数据迁到新平台,每周一 6am ET 更新,
+  给 planning 同事看。Amazon 与 Shopify/TW 无 join key,独立 domain。
+- 架构:放 analytics_platform_32degrees(主 schema)用 amazon_ 前缀隔离
+  (Decision 23);Medallion Bronze/Silver/Gold(Decision 24)。
+- 对应 Panoply 两个 connector:
+    * connector 1 amazon_shipment_items → notebook 01 → amazon_silver_shipment_item ✅ (212 行)
+    * connector 2 amazon_shipments → notebook 02 → amazon_silver_shipment ✅ (4 行)
+    * query model amazon_ship → notebook 03 → amazon_gold_receiving_by_sku ✅ (212 行)
+- notebook 03 复刻了 Panoply amazon_ship 的 created_date 解析(5 种 shipment_name
+  格式),unparsed=0%。
+- SP-API:LWA refresh token 认证 + 指数退避重试 + 分页 + Silver MERGE 幂等
+  (8 天窗口含 1 天重叠)。凭据存 Databricks Secrets scope=amazon。
+  (⚠️ 早期误把 refresh_token/client_secret 贴进聊天,已 rotate。)
+- 后端:main.py 加 /snapshot/{metric_id} 端点(无 date,区别于 /metrics 时间序列);
+  definitions.yaml 加 amazon_fba_receiving_by_sku 指标;
+  databricks_client.py 的 LIST_GUARD_PARAMS 加 statuses/fcs + Amazon mock 分支。
+- 前端:dashboards/amazon-shipments/page.tsx(表格+KPI+status/FC filter+CSV export);
+  api/snapshot/[metricId]/route.ts proxy;dashboards 列表页加 Amazon 卡片。
+- 调度:Databricks Job 建好(三 task:01∥02 并行 → 03,周一 6am ET,Serverless compute)。
+- compute 决策:Amazon 三 notebook 用 Serverless(无 cache,数据小);
+  Slice 1 notebook 04 仍用 classic(需 cache)。
+
+**Amazon 待办(全部等权限恢复)**:
+- [ ] 重跑 01→02→03 确认三表是终版产出
+- [ ] 验证 1-5:行数自洽 / created_date 全解析 / receiving_gap 正确 / 跟 Panoply 抽查对账
+- [ ] 真连冒烟测 /snapshot/amazon_fba_receiving_by_sku(预期 212 行)
+- [ ] mock 模式本地验证前端页面(这个不需要权限,可随时做)
+- [ ] Amazon completion summary 一节(并进 slice_1_completion_summary 或单独文档)
+
+**Slice 1 待办(也等权限恢复)**:
+- [ ] order_metafield 表到位后跑 3 个 DESCRIBE/sample SQL → 确认 schema →
+      重跑 notebook 04 激活 is_replacement_order → 重新对账(预期 −1.51% → ~−1.7%)
+- [ ] Leader demo(script 已草拟 docs/demo/leader_demo_script.md)
+
+**Amazon doc 状态**:
+- ✅ docs/architecture/amazon_ingestion_design.md(已 push)
+- ✅ PROJECT_CONTEXT Decision 23-24(已加)
+- ✅ star_schema_ddl.sql 补 amazon_gold 表 DDL
+- ⬜ Amazon completion summary 一节(待 dashboard 端到端验证后写)
 ### Slice 1 收尾 — 对账通过 trust gate(2026-05-27)
 
 **对账结果**:
