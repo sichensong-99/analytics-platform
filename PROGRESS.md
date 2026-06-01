@@ -6,11 +6,11 @@
 
 ---
 
-# ═══════ 当前状态速览(2026-05-29)═══════
+# ═══════ 当前状态速览(2026-06-01)═══════
 ## 🚦 两条线状态
 | 线 | 状态 |
 |---|---|
-| Slice 1(Style × Channel quantity)| ✅ 对账过 trust gate(−1.51%),Decision 22 v3 锁定。待 metafield → 重跑 04 激活 replacement → demo |
+| Slice 1(Style × Channel quantity)| ✅ 过 trust gate(−1.51%,残差全归因),数据可信可用,team 可访问。replacement 精度待 metafield 异步重跑(不阻塞)。可进 Phase 4 |
 | Amazon ingestion | ✅ 数据层全量正确稳定(826 行活跃 shipment 全量,completeness 修复 D25,范围裁剪 D26)。冒烟测 826 通过。剩:completion summary |
 | Slice 2(Revenue page)| 📋 Slice 1 demo 后启动 |
 | page_view report | 📋 等 TW Web Analytics 接入(邮件已发)|
@@ -32,7 +32,7 @@
 - [x] 重跑 01→02→03 + 验证 1-5 ✅(826 行全量,join 自洽,created_date unparsed=0,gap 公式抽查全对)
 - [x] 真连冒烟测 `/snapshot/amazon_fba_receiving_by_sku` ✅ 826 行
 - [x] mock + 真连前端页面验证 ✅
-- [ ] Amazon completion summary(下一步:Claude 起草)
+- [x] Amazon completion summary(下一步:Claude 起草)
 
 **不依赖权限、随时可做**:Amazon 前端 mock 验证 / Slice 2 revenue 预研究 / Slice 1 completion summary 收尾 / 文档整理
 
@@ -672,6 +672,12 @@ Top 7 覆盖 99%+ 流量(default-visible),长尾 8 个 is_active=FALSE(default-h
 - 切片 3 时可能需要:看 exchange 订单原本来自哪个 channel → 需要 fact 表加 `original_channel_key` 字段
 - 现在不做:不阻塞,标记备忘后续处理
 
+### 备忘 5:待办切片(report 桶里值得进项目的少数,平台栈之后再做)
+- **Slice 2 — Revenue page**:dollar 粒度净退款 + 折扣/税口径 + AOV。新语义(比件数多一层),值得进项目。
+- **Slice 3 候选 — Customer Cohort / 复购次数**:order history 窗口函数 + first-time/returning 状态推导
+  (见备忘 §1 亮点 #15)。有新建模能力,值得进项目。
+- 其余 report(refund&replacement、各种换指标统计)= 纯工作交付,warehouse 建掉,不进项目。
+- **优先级**:先走平台栈 Phase 4→4.5→5→6;Slice 2/3 作为后续切片,不阻塞平台栈。
 ---
 
 # ═══════ 📌 新 chat 启动提醒 ═══════
