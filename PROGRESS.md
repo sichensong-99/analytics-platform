@@ -7,18 +7,11 @@
 ---
 
 # ═══════ 当前状态速览(2026-05-28)═══════
-
-## 🚫 最高阻塞:Databricks 权限被撤
-- 工作中突然登出,重登显示 "no permission to access workspace 2523255732481272"
-- metrics-service 连 SQL Warehouse 报 "API disabled for users without databricks-sql-access or workspace-consume entitlements"
-- 已发邮件给管理员请求恢复 **Workspace access + Databricks SQL access**
-- **纯权限事故,与代码无关**。恢复前所有连 Databricks 的操作都会失败,不要反复试。
-
 ## 🚦 两条线状态
 | 线 | 状态 |
 |---|---|
 | Slice 1(Style × Channel quantity)| ✅ 对账过 trust gate(−1.51%),Decision 22 v3 锁定。待 metafield → 重跑 04 激活 replacement → demo |
-| Amazon ingestion(新增)| ✅ 数据层/调度/后端/前端代码全完成(90%)。待权限恢复跑验证 + 对账 + completion summary |
+| Amazon ingestion | ✅ 数据层全量正确稳定(826 item 全 join,两层 completeness 修复 Decision 25)。剩:真连冒烟测 + completion summary |
 | Slice 2(Revenue page)| 📋 Slice 1 demo 后启动 |
 | page_view report | 📋 等 TW Web Analytics 接入(邮件已发)|
 
@@ -46,7 +39,7 @@
 
 ## 🗂️ 已建表
 **Slice 1 四表**:dim_date 2,922 / dim_channel(v2.0)23 / dim_product 36,680 / fact_orders_line 9,965,352
-**Amazon 三层**:amazon_silver_shipment_item 212 / amazon_silver_shipment 4 / amazon_gold_receiving_by_sku 212
+**Amazon 三层**:amazon_silver_shipment_item 826 / amazon_silver_shipment 21 / amazon_gold_receiving_by_sku 826
 
 ## 🔧 环境 cheat sheet
 - 项目根 `C:\Users\sia.song\analytics-platform` | GitHub sichensong-99/analytics-platform
@@ -90,8 +83,12 @@
 - [ ] 重跑 01→02→03 确认三表是终版产出
 - [ ] 验证 1-5:行数自洽 / created_date 全解析 / receiving_gap 正确 / 跟 Panoply 抽查对账
 - [ ] 真连冒烟测 /snapshot/amazon_fba_receiving_by_sku(预期 212 行)
-- [ ] mock 模式本地验证前端页面(这个不需要权限,可随时做)
+- [x] mock 模式本地验证前端页面 ✅ 2026-05-29(前端→Next.js proxy→FastAPI 链路 200/200,dual-mode 在权限断线期独立供数已验证)
 - [ ] Amazon completion summary 一节(并进 slice_1_completion_summary 或单独文档)
+
+**验证 5(Panoply 对账)归因**:抽查 FBA19CRBL6RZ,新平台 20 SKU 全到、received 为到仓终值;
+Panoply 同 shipment 20 行但 received 全 0、status=IN_TRANSIT,系 5/18 冻结的在途快照。
+差异 100% 归因于 Panoply 数据冻结 + 在途状态,非管线缺陷。新平台数据更完整且更新。已知差异,非 bug。
 
 **Slice 1 待办(也等权限恢复)**:
 - [ ] order_metafield 表到位后跑 3 个 DESCRIBE/sample SQL → 确认 schema → 重跑 notebook 04 激活 is_replacement_order → 重新对账(预期 −1.51% → ~−1.7%)

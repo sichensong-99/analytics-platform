@@ -26,6 +26,14 @@ const dashboards = [
     category: 'Sales × Marketing',
     color: 'bg-emerald-50 text-emerald-700',
   },
+  {
+    id: 'amazon-shipments',
+    title: 'Amazon FBA — Receiving by SKU',
+    description:
+      'FBA inbound shipment receiving status by SKU · Replaces PBI amazon_ship feed',
+    category: 'Operations',
+    color: 'bg-amber-50 text-amber-700',
+  },
 ];
 
 export default async function DashboardsPage() {

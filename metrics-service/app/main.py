@@ -179,3 +179,52 @@ def query_metric(
         params=_serialize_params(params),
         data=rows,
     )
+# ============ Snapshot metrics (no date range) ============
+
+class SnapshotResponse(BaseModel):
+    metric_id: str
+    name: str
+    version: str
+    unit: str
+    params: dict
+    data: list[dict]
+
+
+@app.get("/snapshot/{metric_id}", response_model=SnapshotResponse)
+def query_snapshot_metric(
+    metric_id: str,
+    # Generic optional filters for snapshot-style metrics
+    statuses: Optional[list[str]] = Query(
+        None, description="Filter by shipment_status. Repeat to pass multiple."
+    ),
+    fcs: Optional[list[str]] = Query(
+        None, description="Filter by destination_fc_id. Repeat to pass multiple."
+    ),
+    user: UserPayload = Depends(get_current_user),
+):
+    """
+    Query a snapshot-style metric (no date range) — e.g. current FBA receiving
+    status. Distinct from /metrics/{id} which requires a date window.
+    """
+    metric = get_metric(metric_id)
+    if metric is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Metric '{metric_id}' not found",
+        )
+
+    params: dict[str, Any] = {
+        "statuses": statuses,
+        "fcs": fcs,
+    }
+
+    rows = run_query(metric["sql"], params)
+
+    return SnapshotResponse(
+        metric_id=metric_id,
+        name=metric["name"],
+        version=metric["version"],
+        unit=metric["unit"],
+        params=_serialize_params(params),
+        data=rows,
+    )

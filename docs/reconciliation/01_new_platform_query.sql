@@ -1,35 +1,26 @@
--- =============================================================================
--- Reconciliation Query 1 — New Platform (Databricks SQL)
--- =============================================================================
--- Grain  : iso_year × iso_week × vend_id
--- Window : 2025-07-07 .. 2025-07-13 (fixed)
+-- ============================================================================
+-- Reconciliation Query 1 — New Platform (Databricks)
+-- ============================================================================
+-- Grain  : iso_year x iso_week x vend_id   (matches 02_panoply_legacy_query.sql)
 -- Output : CSV columns: iso_year, iso_week, vend_id, qty_new
---
--- ORDER-TYPE FILTER (approximate legacy-parity)
--- ---------------------------------------------
--- The legacy Panoply report excludes 4 order classes from channel-driven
--- sales: replacements, refunds, exchanges (%EXC%), and Returnly-tagged returns.
--- Rationale (per Leader): refund/replacement are independent post-order events,
--- not channel-attributable sales; including them double-counts or deflates.
---
--- This query approximates that exclusion with the two signals available in
--- fact_orders_line today: %EXC% order names + is_refunded flag.
--- NOT YET COVERED: replacement orders, Returnly-tagged returns — these require
--- source tables / Shopify `tags` not yet ingested via Fivetran. Tracked as a
--- backlog item: materialize a unified `is_sales_attributable` flag (see README).
--- =============================================================================
+-- Window : ISO 2025-W28  (= 2025-07-07 .. 2025-07-13, matches query 2)
+-- Model  : Decision 22 v3 —
+--          * EXC + replacement excluded via is_sales_attributable = TRUE
+--          * refunds netted line-level: net units = quantity - refunded_quantity
+--          * vend_id IS NOT NULL mirrors Panoply (drops ERS-unmatched lines)
+-- ============================================================================
 
 SELECT
     f.iso_year,
     f.iso_week,
     p.vend_id,
-    SUM(f.quantity) AS qty_new
-FROM mvdevdatabricks.analytics_platform_32degrees.fact_orders_line f
-JOIN mvdevdatabricks.analytics_platform_32degrees.dim_date    d ON f.date_key    = d.date_key
-JOIN mvdevdatabricks.analytics_platform_32degrees.dim_product p ON f.product_key = p.product_key
-WHERE d.date_actual BETWEEN '2025-07-07' AND '2025-07-13'
-  AND p.product_key > 0
-  AND f.is_refunded = FALSE
-  AND f.shopify_order_name NOT LIKE '%EXC%'
+    SUM(f.quantity - f.refunded_quantity) AS qty_new
+FROM mvdevdatabricks.analytics_platform_32degrees.fact_orders_line AS f
+JOIN mvdevdatabricks.analytics_platform_32degrees.dim_product AS p
+    ON f.product_key = p.product_key
+WHERE f.iso_year = 2025
+  AND f.iso_week = 28
+  AND f.is_sales_attributable = TRUE
+  AND p.vend_id IS NOT NULL
 GROUP BY f.iso_year, f.iso_week, p.vend_id
 ORDER BY f.iso_year, f.iso_week, p.vend_id;
