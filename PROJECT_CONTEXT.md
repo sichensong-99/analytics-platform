@@ -356,29 +356,38 @@ v2 注(2026-05-26):TW 同事确认 TW Web Analytics 表覆盖 funnel(page view /
 - **日期**:2026-05-29
 - **背景**:gold(items ⨝ shipments,复刻 Panoply `amazon_ship` inner join)行数持续 < items,
   且单个 shipment 的 SKU 数也少于 Panoply。两层 completeness 缺陷,同一根因家族:
-  **两个 SP-API feed 各自用 8 天 `LastUpdated` 窗口,但收货是分批陆续到的**——
-  - 缺陷①(referential):shipment 状态早已不变(几周前 CLOSED),落在 shipments 窗口外,
-    但其 item 收货量仍在更新落在 items 窗口内 → 67 个 item 行的 shipment 维度缺失,inner join 静默丢弃。
-  - 缺陷②(SKU-level):同一 active shipment 里,最后更新早于 8 天的 SKU 行被 items 窗口漏掉
+  两个 SP-API feed 各自用 8 天 LastUpdated 窗口,但收货分批陆续到 ——
+  - 缺陷①(referential):shipment 状态早已不变落窗口外,但其 item 收货量仍在更新落窗口内
+    → 67 个 item 行的 shipment 维度缺失,inner join 静默丢弃。
+  - 缺陷②(SKU-level):同一 active shipment 内,最后更新早于 8 天的 SKU 行被 items 窗口漏掉
     (FBA19CRBL6RZ:窗口只返回 12/20 SKU)。
 - **修正**:
-  - **02 shipments → key-driven**:从 silver_item 读 distinct `shipment_id`,用 `ShipmentIdList`
-    按 ID 拉,保证每个 item 都能 join 上。
-  - **01 items → 两段式**:Stage 1 用 8 天 `DATE_RANGE` 仅**发现活跃 shipment_id**(丢弃其 item 行);
-    Stage 2 对每个活跃 shipment 用 `GET /shipments/{id}/items`(无日期、单页不翻页)拉**全量 SKU**。
-  - DAG `01∥02→03` 改为 `01→02→03`(02 依赖 01 产出)。
-- **SP-API 实战坑(面试可讲)**:
-  - `/shipmentItems` 的 `QueryType` 只认 `DATE_RANGE`/`NEXT_TOKEN`,无 `SHIPMENT` 取值;
-    取单 shipment 全量 item 要走 path 形态 `/shipments/{id}/items`。
-  - 该 path endpoint **不能用 NextToken 翻页**——单次即返回全量,误翻页会重复吐同样行并触发 429。
-  - 限流处理:`Retry-After` header + 指数退避 + jitter(封顶 60s)+ 每 shipment 0.8s 节流。
-- **验证**:items_without_shipment 67→0;FBA19CRBL6RZ 12→20 SKU;gold 191→258→**826**(=item 全量数)。
-  新平台 received 为到仓终值(60/59/61),Panoply 同 shipment received 全为 0(5/18 冻结的在途快照)→
-  新平台同时更全 + 更新,"修正 legacy 过期快照"叙事的实证样本。
-- **已知设计性质(非 bug)**:silver_item 是累积全集(MERGE 只增不删),每跑仅刷新当前活跃 shipment;
-  已 CLOSED 很久的 shipment 以"最后被发现时的状态"长期留存。对 FBA 入库对账正确(收讫即定值)。
-- **关键词**:Referential Completeness · SKU-level Completeness · Two-stage Discovery-then-Hydrate ·
+  - 02 shipments → key-driven:从 silver_item 读 distinct shipment_id,用 ShipmentIdList 按 ID 拉。
+  - 01 items → 两段式:Stage 1 用 DATE_RANGE 仅发现活跃 shipment_id(丢弃其 item 行);
+    Stage 2 对每个活跃 shipment 用 GET /shipments/{id}/items(无日期、单页不翻页)拉全量 SKU。
+  - DAG 01∥02→03 改为 01→02→03。
+- **SP-API 实战坑**:/shipmentItems 的 QueryType 只认 DATE_RANGE/NEXT_TOKEN,无 SHIPMENT;
+  取单 shipment 全量 item 走 path 形态 /shipments/{id}/items;该 path endpoint 不能用 NextToken
+  翻页(会重复吐行触发 429);限流用 Retry-After + 指数退避 + jitter + 节流。
+- **验证**:items_without_shipment 67→0;FBA19CRBL6RZ 12→20 SKU;gold 191→258→826(=item 全量数)。
+  新平台 received 为到仓终值,Panoply 同 shipment received 全为 0(5/18 冻结的在途快照)→
+  新平台更全 + 更新,"修正 legacy 过期快照"实证。
+- **关键词**:Referential Completeness · SKU-level Completeness · Two-stage Discover-then-Hydrate ·
   Fact-key-driven Dimension Fetch · Cross-feed Window Skew · SP-API Throttling/Backoff · Legacy Snapshot Correction
+
+### Decision 26:Amazon 范围裁剪 —— 只保留活跃 shipment,不做历史回填
+- **日期**:2026-05-29
+- **背景**:量化历史深度发现新平台 gold 覆盖 21 个 shipment(2024-07~2026-05,近期活跃),
+  Panoply 累积 1363 个(2022-10 起全史)。表面看新平台缺 98.5% 历史。
+- **业务用途核实**:planning 同事用此数据跟进近期活跃 shipment 以制定补货/入库计划,
+  不需要历史已定讫 shipment 的记录(过去几年的死数据对前瞻性 planning 无价值)。
+- **决策**:不做历史回填。新平台的"发现窗口 → 只抓近期活跃 shipment"恰好匹配 planning 的活跃视图
+  需求,是特性而非缺陷。明确拒绝从 Panoply 搬全史(路线 A)—— 会污染活跃视图、增加维护负担、
+  灌入对用例无价值的死数据。
+- **Trade-off**:✅ 数据范围精确匹配业务用途;活跃视图干净;零额外维护;不依赖 Panoply 长期存活。
+  ❌ 不能用于历史回溯分析 —— 但不在用例内;若将来需要可另起一次性 backfill(已评估路线 A/B)。
+- **历史深度差异归因**:新平台 21 vs Panoply 1363,系有意范围裁剪,非数据丢失。
+- **关键词**:Scope-driven Data Modeling · Business-aligned Retention · Active-window Design
 ---
 
 ## 6. 项目仓库

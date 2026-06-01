@@ -6,12 +6,12 @@
 
 ---
 
-# ═══════ 当前状态速览(2026-05-28)═══════
+# ═══════ 当前状态速览(2026-05-29)═══════
 ## 🚦 两条线状态
 | 线 | 状态 |
 |---|---|
 | Slice 1(Style × Channel quantity)| ✅ 对账过 trust gate(−1.51%),Decision 22 v3 锁定。待 metafield → 重跑 04 激活 replacement → demo |
-| Amazon ingestion | ✅ 数据层全量正确稳定(826 item 全 join,两层 completeness 修复 Decision 25)。剩:真连冒烟测 + completion summary |
+| Amazon ingestion | ✅ 数据层全量正确稳定(826 行活跃 shipment 全量,completeness 修复 D25,范围裁剪 D26)。冒烟测 826 通过。剩:completion summary |
 | Slice 2(Revenue page)| 📋 Slice 1 demo 后启动 |
 | page_view report | 📋 等 TW Web Analytics 接入(邮件已发)|
 
@@ -28,12 +28,11 @@
 - [ ] 重跑 notebook 04 激活 `is_replacement_order` → 重新对账(预期 −1.51% → ~−1.7%)
 - [ ] Leader demo(script:`docs/demo/leader_demo_script.md`)
 
-**Amazon**:
-- [ ] 重跑 01→02→03 确认三表终版产出
-- [ ] 验证 1-5:行数自洽 / created_date 全解析 / receiving_gap 正确 / 跟 Panoply amazon_ship 抽查对账
-- [ ] 真连冒烟测 `/snapshot/amazon_fba_receiving_by_sku`(预期 212 行)
-- [ ] **【不需要权限,可随时做】** mock 模式本地验证前端页面
-- [ ] Amazon completion summary 一节
+**Amazon**(数据层全部完成,仅剩收口文档):
+- [x] 重跑 01→02→03 + 验证 1-5 ✅(826 行全量,join 自洽,created_date unparsed=0,gap 公式抽查全对)
+- [x] 真连冒烟测 `/snapshot/amazon_fba_receiving_by_sku` ✅ 826 行
+- [x] mock + 真连前端页面验证 ✅
+- [ ] Amazon completion summary(下一步:Claude 起草)
 
 **不依赖权限、随时可做**:Amazon 前端 mock 验证 / Slice 2 revenue 预研究 / Slice 1 completion summary 收尾 / 文档整理
 
