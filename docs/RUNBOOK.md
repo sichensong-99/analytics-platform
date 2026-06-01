@@ -50,9 +50,12 @@ dim_product ─┘
 ## 3. Schedule & compute
 
 - **Schedule**: daily at **06:30 America/New_York** (`0 30 6 * * ?`), DST-aware.
-- **Compute**: a single **ephemeral autoscaling job cluster** (`slice1_job_cluster`,
-  1–3 workers) shared by all tasks. It spins up at run start and terminates at
-  run end — no idle cost. Unity Catalog access via `SINGLE_USER` mode.
+- **Compute**: a governed **single-user Personal Compute** cluster (classic),
+  referenced by all tasks via `existing_cluster_id`. Classic compute is required
+  because notebook 04 uses `.cache()` (unsupported on serverless); an ephemeral
+  job cluster is not used because the workspace disables the cluster-creation
+  entitlement. The cluster auto-terminates after each run (idle cost bounded); a
+  scheduled run starts it automatically, adding a couple of minutes.
 - **Notifications**: email on failure to `sia.song@32degrees.com`.
 - **Retries**: dim/fact tasks retry up to 2× with a 2-minute backoff; `dq_gate`
   does **not** retry (a real data failure should not be retried — fix the data).
@@ -121,4 +124,4 @@ from a failed run (cheaper, preserves the run). Use **Run now** for a fresh full
 | Date | Change |
 |---|---|
 | 2026-05 | Initial 7-task DAG, DQ-as-gate (Spark-native), config-as-code |
-| 2026-06 | Added dim_product Unknown member (key 0); fact coalesces unmatched product_key → 0 (Kimball FK integrity). Switched to ephemeral autoscaling job cluster; schedule unpaused (went live) |
+| 2026-06 | Added dim_product Unknown member (key 0); fact coalesces unmatched product_key → 0 (Kimball FK integrity). Schedule unpaused (went live) on governed single-user Personal Compute — cluster-creation entitlement unavailable, serverless ruled out by `.cache()` |
