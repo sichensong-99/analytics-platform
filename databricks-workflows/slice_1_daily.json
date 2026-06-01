@@ -23,9 +23,9 @@
     {
       "task_key": "dim_date",
       "run_if": "ALL_SUCCESS",
-      "existing_cluster_id": "REPLACE_WITH_YOUR_PERSONAL_COMPUTE_CLUSTER_ID",
+      "existing_cluster_id": "0521-210526-y4gnz95c",
       "notebook_task": {
-        "notebook_path": "/Workspace/Users/sia.song@32degrees.com/slice_1/01_build_dim_date",
+        "notebook_path": "/Workspace/Users/sia.song@32degrees.com/analytics-platform/slice_1/01_build_dim_date",
         "source": "WORKSPACE"
       },
       "max_retries": 2,
@@ -36,9 +36,9 @@
     {
       "task_key": "dim_channel",
       "run_if": "ALL_SUCCESS",
-      "existing_cluster_id": "REPLACE_WITH_YOUR_PERSONAL_COMPUTE_CLUSTER_ID",
+      "existing_cluster_id": "0521-210526-y4gnz95c",
       "notebook_task": {
-        "notebook_path": "/Workspace/Users/sia.song@32degrees.com/slice_1/02_seed_dim_channel",
+        "notebook_path": "/Workspace/Users/sia.song@32degrees.com/analytics-platform/slice_1/02_seed_dim_channel",
         "source": "WORKSPACE"
       },
       "max_retries": 2,
@@ -49,9 +49,9 @@
     {
       "task_key": "dim_product",
       "run_if": "ALL_SUCCESS",
-      "existing_cluster_id": "REPLACE_WITH_YOUR_PERSONAL_COMPUTE_CLUSTER_ID",
+      "existing_cluster_id": "0521-210526-y4gnz95c",
       "notebook_task": {
-        "notebook_path": "/Workspace/Users/sia.song@32degrees.com/slice_1/03_build_dim_product",
+        "notebook_path": "/Workspace/Users/sia.song@32degrees.com/analytics-platform/slice_1/03_build_dim_product",
         "source": "WORKSPACE"
       },
       "max_retries": 2,
@@ -67,9 +67,9 @@
         { "task_key": "dim_product" }
       ],
       "run_if": "ALL_SUCCESS",
-      "existing_cluster_id": "REPLACE_WITH_YOUR_PERSONAL_COMPUTE_CLUSTER_ID",
+      "existing_cluster_id": "0521-210526-y4gnz95c",
       "notebook_task": {
-        "notebook_path": "/Workspace/Users/sia.song@32degrees.com/slice_1/04_build_fact_orders_line",
+        "notebook_path": "/Workspace/Users/sia.song@32degrees.com/analytics-platform/slice_1/04_build_fact_orders_line",
         "source": "WORKSPACE"
       },
       "max_retries": 2,
@@ -83,11 +83,11 @@
         { "task_key": "fact_orders_line" }
       ],
       "run_if": "ALL_SUCCESS",
-      "existing_cluster_id": "REPLACE_WITH_YOUR_PERSONAL_COMPUTE_CLUSTER_ID",
+      "existing_cluster_id": "0521-210526-y4gnz95c",
       "notebook_task": {
-        "notebook_path": "/Workspace/Users/sia.song@32degrees.com/slice_1/dq_gate",
+        "notebook_path": "/Workspace/Users/sia.song@32degrees.com/analytics-platform/slice_1/dq_gate",
         "base_parameters": {
-          "dq_config_dir": "/Workspace/Users/sia.song@32degrees.com/slice_1/dq_configs",
+          "dq_config_dir": "/Workspace/Users/sia.song@32degrees.com/analytics-platform/slice_1/dq_configs",
           "report_dir": "dbfs:/tmp/dq_reports"
         },
         "source": "WORKSPACE"
@@ -101,9 +101,9 @@
         { "task_key": "dq_gate" }
       ],
       "run_if": "ALL_SUCCESS",
-      "existing_cluster_id": "REPLACE_WITH_YOUR_PERSONAL_COMPUTE_CLUSTER_ID",
+      "existing_cluster_id": "0521-210526-y4gnz95c",
       "notebook_task": {
-        "notebook_path": "/Workspace/Users/sia.song@32degrees.com/slice_1/metric_refresh_placeholder",
+        "notebook_path": "/Workspace/Users/sia.song@32degrees.com/analytics-platform/slice_1/metric_refresh_placeholder",
         "source": "WORKSPACE"
       },
       "max_retries": 2,
@@ -117,9 +117,9 @@
         { "task_key": "metric_refresh" }
       ],
       "run_if": "ALL_SUCCESS",
-      "existing_cluster_id": "REPLACE_WITH_YOUR_PERSONAL_COMPUTE_CLUSTER_ID",
+      "existing_cluster_id": "0521-210526-y4gnz95c",
       "notebook_task": {
-        "notebook_path": "/Workspace/Users/sia.song@32degrees.com/slice_1/success_digest",
+        "notebook_path": "/Workspace/Users/sia.song@32degrees.com/analytics-platform/slice_1/success_digest",
         "base_parameters": {
           "fact_fqn": "mvdevdatabricks.analytics_platform_32degrees.fact_orders_line",
           "history_fqn": "mvdevdatabricks.analytics_platform_32degrees.pipeline_run_history",
