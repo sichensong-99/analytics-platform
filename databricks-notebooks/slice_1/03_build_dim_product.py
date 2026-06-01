@@ -236,7 +236,32 @@ final = (
 
 # MAGIC %md
 # MAGIC ## 7. Pre-write assertions
+# COMMAND ----------
 
+# MAGIC %md
+# MAGIC ## 6b. Add conformed Unknown member (product_key = 0)
+# MAGIC Kimball convention: unmatched fact lookups resolve to a designated Unknown
+# MAGIC member (surrogate key 0), never NULL. fact_orders_line coalesces an unmatched
+# MAGIC SKU to product_key = 0, so this row must exist. Built from `final`'s own
+# MAGIC schema so column types always match.
+
+# COMMAND ----------
+
+_unknown_vals = {
+    "product_key": 0, "sku": "__UNKNOWN__", "vend_id": "UNKNOWN",
+    "item_description": "Unknown Product", "season": "UNKNOWN",
+    "group_name": "UNKNOWN", "gender": "UNKNOWN", "class_name": "UNKNOWN",
+    "master_style": "UNKNOWN", "cost": None, "retail": None,
+    "is_complete": False, "_ers_schema_version": "unknown_member",
+    # _ingested_at set to current_timestamp below
+}
+unknown_member = spark.range(1).select(*[
+    (F.current_timestamp() if field.name == "_ingested_at"
+     else F.lit(_unknown_vals.get(field.name)).cast(field.dataType)).alias(field.name)
+    for field in final.schema
+])
+final = final.unionByName(unknown_member)
+print("[INFO] Added Unknown member (product_key = 0)")
 # COMMAND ----------
 
 final_count = final.count()
