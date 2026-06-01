@@ -11,13 +11,23 @@
 -- =============================================================================
 
 SELECT
-    TO_CHAR(day, 'IYYY')::INT AS iso_year,
-    TO_CHAR(day, 'IW')::INT   AS iso_week,
+
+    EXTRACT(ISOYEAR FROM day) AS iso_year,
+
+    EXTRACT(ISOWEEK FROM day) AS iso_week,
+
     style                     AS vend_id,
+
     SUM(quantity)             AS qty_panoply
-FROM "Style_selling_dfNEW"
-WHERE day BETWEEN '2025-07-07' AND '2025-07-13'
+
+FROM `panoply.Style_selling_dfNEW`
+
+WHERE day BETWEEN DATE '2025-07-07' AND DATE '2025-07-13'
+
   AND quantity IS NOT NULL
+
   AND style IS NOT NULL
+
 GROUP BY 1, 2, 3
+
 ORDER BY 1, 2, 3;

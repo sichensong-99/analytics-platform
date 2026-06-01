@@ -172,21 +172,29 @@ metrics:
   # See: docs/existing_data_inventory.md §5.1
   # ===========================================
   quantity_by_style_channel_week:
-    version: v1.1
+    version: v1.2
     status: active
     owner: sia
     created_at: "2026-05-19"
-    updated_at: "2026-05-21"
+    updated_at: "2026-05-27"
 
     name: "Quantity by Style × Channel × Week"
-    description: "Weekly units sold sliced by product style and marketing channel, replacing PBI Style_selling_df page."
+    description: "Weekly net units sold sliced by product style and marketing channel, replacing PBI Style_selling_df page."
     business_definition: |
-      Sum of order line quantity at row grain.
-      Includes all orders (refunds/replacements not excluded — front-end can toggle via is_refunded flag in fact_orders_line).
+      Net units sold = SUM(quantity - refunded_quantity).
+      Refunds are netted at the order_line grain across ALL restock types
+      (return / no_restock / cancel / legacy_restock) — a cancelled unit
+      never produced a real sale and is deducted accordingly.
+      Order-level exclusions: rows are filtered to is_sales_attributable = TRUE,
+      which excludes EXC orders (Shopify name LIKE '%EXC%') and replacement
+      orders (Shopify order metafield `replace_refund` = '["Replace"]').
       Channel source: Triple Whale `channel_source` (post-2025-09 complete).
-      `channel_group` is the dimension roll-up hierarchy level (Paid Search / Paid Social / Email / ...).
+      `channel_group` is the dimension roll-up hierarchy (Paid Search /
+      Paid Social / Email / ...).
       Date grain: ISO 8601 year-week (Mon-Sun).
-      Currency: N/A (count).
+      Currency: N/A (count). Reconciliation against Panoply Style_selling_df
+      week 28-2025: overall −1.51% (within < 2% trust gate),
+      residual fully itemized.
     unit: count
 
     source_tables:
@@ -196,7 +204,6 @@ metrics:
       - mvdevdatabricks.analytics_platform_32degrees.dim_product
     upstream_metrics: []
 
-    # === Self-describing metadata (Phase 5 Metric Catalog will consume) ===
     grain:
       - iso_year
       - iso_week
@@ -232,6 +239,8 @@ metrics:
       raw_sources:
         - shopify_32degrees.order
         - shopify_32degrees.order_line
+        - shopify_32degrees.order_line_refund
+        - shopify_32degrees.order_metafield
         - mvdev_federated_catalog.triple_whale.attribution_order_click
         - analytics_platform_32degrees.raw_uploads/ers_monthly
 
@@ -244,7 +253,7 @@ metrics:
         p.season,
         c.channel_source,
         c.channel_group,
-        SUM(f.quantity) AS value
+        SUM(f.quantity - f.refunded_quantity) AS value
       FROM mvdevdatabricks.analytics_platform_32degrees.fact_orders_line f
       JOIN mvdevdatabricks.analytics_platform_32degrees.dim_date d
         ON f.date_key = d.date_key
@@ -253,6 +262,8 @@ metrics:
       JOIN mvdevdatabricks.analytics_platform_32degrees.dim_channel c
         ON f.channel_key = c.channel_key
       WHERE d.date_key BETWEEN :start_date AND :end_date
+        AND f.is_sales_attributable = TRUE
+        AND p.vend_id IS NOT NULL
         AND (:channels IS NULL OR c.channel_source IN (:channels))
         AND (:seasons IS NULL OR p.season IN (:seasons))
         AND (:styles IS NULL OR p.vend_id IN (:styles))
@@ -275,4 +286,64 @@ metrics:
       - version: v1.1
         date: "2026-05-21"
         change: "Renamed legacy_channel_group -> channel_group to match dim_channel v2.0 (Decision 21). Corrected raw source attribution_order -> attribution_order_click."
+        breaking: false
+      - version: v1.2
+        date: "2026-05-27"
+        change: "Net units model (Decision 22 v3): SUM(quantity - refunded_quantity), is_sales_attributable = TRUE filter (EXC + replacement order-level exclusion). Cancel netted at line grain via restock_type-agnostic refunded_quantity. is_refunded flag retired."
+        breaking: true
+
+  amazon_fba_receiving_by_sku:
+    version: v1.0
+    status: active
+    owner: sia
+    created_at: "2026-05-28"
+    updated_at: "2026-05-28"
+
+    name: "Amazon FBA Receiving by SKU"
+    description: "Current FBA inbound shipment receiving status by SKU, replacing the legacy Panoply amazon_ship PBI feed."
+    business_definition: |
+      One row per (shipment, SKU). Sourced from Amazon SP-API shipmentItems
+      JOIN shipments on ShipmentId (replicates legacy Panoply amazon_ship).
+      created_date parsed from shipment_name (5 legacy formats).
+      receiving_gap = quantity_shipped - quantity_received.
+      Snapshot metric — no date range (planning team views current state).
+    unit: count
+
+    source_tables:
+      - mvdevdatabricks.analytics_platform_32degrees.amazon_gold_receiving_by_sku
+    upstream_metrics: []
+
+    lineage_upstream:
+      facts:
+        - amazon_gold_receiving_by_sku
+      raw_sources:
+        - "Amazon SP-API /fba/inbound/v0/shipmentItems"
+        - "Amazon SP-API /fba/inbound/v0/shipments"
+
+    sql: |
+      SELECT
+        shipment_id,
+        shipment_name,
+        shipment_status,
+        destination_fc_id,
+        created_date,
+        seller_sku,
+        fulfillment_network_sku,
+        quantity_shipped,
+        quantity_received,
+        quantity_in_case,
+        receiving_gap
+      FROM mvdevdatabricks.analytics_platform_32degrees.amazon_gold_receiving_by_sku
+      WHERE (:statuses IS NULL OR shipment_status IN (:statuses))
+        AND (:fcs IS NULL OR destination_fc_id IN (:fcs))
+      ORDER BY created_date DESC NULLS LAST, shipment_id, seller_sku
+
+    params:
+      - statuses
+      - fcs
+
+    changelog:
+      - version: v1.0
+        date: "2026-05-28"
+        change: "Initial version. Migrated from PBI amazon_ship (Panoply)."
         breaking: false

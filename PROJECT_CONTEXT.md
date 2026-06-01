@@ -24,9 +24,10 @@
 
 | 数据源 | 状态 |
 |---|---|
-| Shopify 订单数据 | 等数据同事导入 Databricks(进行中) |
-| Triple Whale 广告归因数据 | 等数据同事导入 Databricks(进行中) |
-| 已有的 Databricks 数据 | 部分已有(支撑现有 PBI report) |
+| Shopify 订单数据(`shopify_32degrees`) | ✅ Ready(Fivetran,11.45M 订单) |
+| Triple Whale 归因(`mvdev_federated_catalog.triple_whale`) | ✅ Ready(全月 ≥99.85% match) |
+| ERS 产品主数据 | ✅ 月度 CSV 上传至共享 raw zone(Decision 20) |
+| Amazon FBA 入库(SP-API) | ✅ 自建 ingestion(Decision 23/24) |
 
 **关键决策**:Triple Whale **走 Databricks**,不直接进应用层。理由:
 - 跨源分析需要在统一数据层关联(订单 + 归因)
@@ -307,6 +308,22 @@ v2 注(2026-05-26):TW 同事确认 TW Web Analytics 表覆盖 funnel(page view /
 - **关键词**(新增):Native Object over Tag-Reverse-Engineering /
   System Source-of-Record / Incremental Signal Integration / Fault-tolerant ETL
 
+### Decision 22 v3 修订(2026-05-27)— 最终模型,取代前述所有版本
+- **触发**:读 Panoply 源码 + week-28 逐项对账证实"整单排除 refund"是错的
+  (残差 1.97%→6.57%)。
+- **最终模型**:
+  - `is_sales_attributable = NOT(is_exc_order OR is_replacement_order)` —— 仅整单
+    排除 EXC + replacement 两类
+  - refund 改为**行级净扣**:`refunded_quantity` 列 = SUM(order_line_refund.quantity)
+    覆盖全 restock_type(含 cancel);净销量 = quantity − refunded_quantity
+  - `is_refunded` / `is_refund_order` 废弃删除
+  - replacement 信号 = Shopify `order_metafield` 表(独立表),notebook 04 表存在性
+    自动检测 + 优雅降级
+- **对账结果**:week 28 overall −1.51%,残差 100% 归因(EXC 2,209 + refund 6,573 +
+  cancel 803),通过 trust gate。
+- **关键词**:Reconciliation-Driven Model Correction / Restock-type-aware Line-level
+  Refund Netting / Fully-itemized Residual Attribution
+
   ### Decision 23:Amazon 入库数据作为平台独立 domain,放主 schema 用前缀隔离
 - **日期**:2026-05-28
 - **背景**:Leader 要求把 Panoply 上的 Amazon FBA 入库数据(shipment items +
@@ -334,6 +351,34 @@ v2 注(2026-05-26):TW 同事确认 TW Web Analytics 表覆盖 funnel(page view /
   - ✅ Bronze 原始留痕 + 90 天 retention 支持 replay
   - ❌ 团队需理解两套范式;用 README/doc 说明何时用哪种
 - **关键词**:Medallion Architecture / Schema-on-Read Bronze / Schema-on-Write Silver / Replay Window
+
+### Decision 25:Amazon 双源 completeness 修正(referential + SKU-level)
+- **日期**:2026-05-29
+- **背景**:gold(items ⨝ shipments,复刻 Panoply `amazon_ship` inner join)行数持续 < items,
+  且单个 shipment 的 SKU 数也少于 Panoply。两层 completeness 缺陷,同一根因家族:
+  **两个 SP-API feed 各自用 8 天 `LastUpdated` 窗口,但收货是分批陆续到的**——
+  - 缺陷①(referential):shipment 状态早已不变(几周前 CLOSED),落在 shipments 窗口外,
+    但其 item 收货量仍在更新落在 items 窗口内 → 67 个 item 行的 shipment 维度缺失,inner join 静默丢弃。
+  - 缺陷②(SKU-level):同一 active shipment 里,最后更新早于 8 天的 SKU 行被 items 窗口漏掉
+    (FBA19CRBL6RZ:窗口只返回 12/20 SKU)。
+- **修正**:
+  - **02 shipments → key-driven**:从 silver_item 读 distinct `shipment_id`,用 `ShipmentIdList`
+    按 ID 拉,保证每个 item 都能 join 上。
+  - **01 items → 两段式**:Stage 1 用 8 天 `DATE_RANGE` 仅**发现活跃 shipment_id**(丢弃其 item 行);
+    Stage 2 对每个活跃 shipment 用 `GET /shipments/{id}/items`(无日期、单页不翻页)拉**全量 SKU**。
+  - DAG `01∥02→03` 改为 `01→02→03`(02 依赖 01 产出)。
+- **SP-API 实战坑(面试可讲)**:
+  - `/shipmentItems` 的 `QueryType` 只认 `DATE_RANGE`/`NEXT_TOKEN`,无 `SHIPMENT` 取值;
+    取单 shipment 全量 item 要走 path 形态 `/shipments/{id}/items`。
+  - 该 path endpoint **不能用 NextToken 翻页**——单次即返回全量,误翻页会重复吐同样行并触发 429。
+  - 限流处理:`Retry-After` header + 指数退避 + jitter(封顶 60s)+ 每 shipment 0.8s 节流。
+- **验证**:items_without_shipment 67→0;FBA19CRBL6RZ 12→20 SKU;gold 191→258→**826**(=item 全量数)。
+  新平台 received 为到仓终值(60/59/61),Panoply 同 shipment received 全为 0(5/18 冻结的在途快照)→
+  新平台同时更全 + 更新,"修正 legacy 过期快照"叙事的实证样本。
+- **已知设计性质(非 bug)**:silver_item 是累积全集(MERGE 只增不删),每跑仅刷新当前活跃 shipment;
+  已 CLOSED 很久的 shipment 以"最后被发现时的状态"长期留存。对 FBA 入库对账正确(收讫即定值)。
+- **关键词**:Referential Completeness · SKU-level Completeness · Two-stage Discovery-then-Hydrate ·
+  Fact-key-driven Dimension Fetch · Cross-feed Window Skew · SP-API Throttling/Backoff · Legacy Snapshot Correction
 ---
 
 ## 6. 项目仓库
@@ -343,7 +388,7 @@ v2 注(2026-05-26):TW 同事确认 TW Web Analytics 表覆盖 funnel(page view /
 analytics-platform/
 ├── frontend/                  # Next.js portal (Phase 1 ✅)
 ├── metrics-service/           # FastAPI metrics service (Phase 2A ✅)
-├── databricks-notebooks/      # Data warehouse modeling (Phase 3, TODO)
+├── databricks-notebooks/      # Data warehouse modeling (Phase 3)
 ├── docs/                      # Documentation
 │   ├── data_contracts/        # Data contracts
 │   ├── data_modeling/         # ER diagrams, dimensional model
@@ -366,9 +411,13 @@ analytics-platform/
 - **简历核心叙事**:
   > "主导设计并落地端到端数据平台,从多源数据接入到 Lakehouse 数仓建模、指标服务化、自助分析门户,配套调度、数据质量、流处理等平台能力,替代 Power BI Service 节省 $X/年。"
 
-  ---
+---
 
-## 8. Remaining Tasks Tracker(2026-05-19 起)
+## 8. Remaining Tasks Tracker(2026-05-19 起,已归档)
+
+> ⚠️ **本节已过时**(停留在 Slice 1 启动前,Day 2-5 当时还没做)。
+> 当前真实进度与待办**一律以 PROGRESS.md 顶部 CURRENT STATE 为准**。
+> 本节仅保留作历史,不要据此判断进度。
 
 ### P0 任务(Day 2-5 之前必做)
 

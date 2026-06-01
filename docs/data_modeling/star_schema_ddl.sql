@@ -188,3 +188,33 @@ PARTITIONED BY (iso_year, iso_week)
 COMMENT 'Slice 1 order-line sales fact. Grain: 1 row per Shopify order_line with TW last-touch attribution. Decision 22 v3 — refund as line-level net deduction.'
 TBLPROPERTIES ('delta.autoOptimize.optimizeWrite' = 'true');
 
+-- ============================================================================
+-- AMAZON DOMAIN — Medallion (Bronze/Silver/Gold)
+-- ----------------------------------------------------------------------------
+-- Independent business domain. NO join key with the Shopify/TW Kimball domain.
+-- Prefix-isolated (amazon_) within the same schema. See Decision 23, 24.
+-- Source: Amazon SP-API /fba/inbound/v0/shipmentItems + /shipments.
+-- Replicates legacy Panoply two-connector + amazon_ship query model.
+-- ============================================================================
+
+-- bronze_shipment_items / bronze_shipments: see notebook 01 / 02 (schema-on-read JSON)
+-- silver_shipment_item / silver_shipment:   see notebook 01 / 02 (typed, MERGE upsert)
+
+-- GOLD: receiving summary by SKU (planning team consumes; PBI amazon_ship parity)
+CREATE TABLE IF NOT EXISTS amazon_gold_receiving_by_sku (
+  shipment_id              STRING     COMMENT 'Amazon ShipmentId.',
+  shipment_name            STRING     COMMENT 'Human-readable shipment name.',
+  shipment_status          STRING     COMMENT 'Current shipment status.',
+  destination_fc_id        STRING     COMMENT 'Destination fulfillment center.',
+  created_date             DATE       COMMENT 'Parsed from shipment_name (5 legacy Panoply formats).',
+  seller_sku               STRING     COMMENT 'Seller SKU.',
+  fulfillment_network_sku  STRING     COMMENT 'FNSKU.',
+  quantity_shipped         INT        COMMENT 'Units shipped.',
+  quantity_received        INT        COMMENT 'Units received at FC.',
+  quantity_in_case         INT        COMMENT 'Units per case.',
+  receiving_gap            INT        COMMENT 'quantity_shipped - quantity_received.',
+  _built_at                TIMESTAMP  COMMENT 'Gold build timestamp.'
+)
+USING DELTA
+COMMENT 'Amazon FBA inbound receiving summary by SKU. items JOIN shipments on shipment_id, with created_date parsed from shipment_name. Decision 23-24.'
+TBLPROPERTIES ('delta.autoOptimize.optimizeWrite' = 'true');
