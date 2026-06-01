@@ -492,7 +492,7 @@ fact_raw = (
     ol_dc.select(
         # Surrogate keys
         F.coalesce(F.col("dc.channel_key"), F.lit(0)).alias("channel_key"),
-        F.col("dp.product_key"),
+        F.coalesce(F.col("dp.product_key"), F.lit(0)).alias("product_key"),
         F.col("date_key"),
 
         # Degenerate dimensions
