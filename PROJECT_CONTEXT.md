@@ -388,6 +388,14 @@ v2 注(2026-05-26):TW 同事确认 TW Web Analytics 表覆盖 funnel(page view /
   ❌ 不能用于历史回溯分析 —— 但不在用例内;若将来需要可另起一次性 backfill(已评估路线 A/B)。
 - **历史深度差异归因**:新平台 21 vs Panoply 1363,系有意范围裁剪,非数据丢失。
 - **关键词**:Scope-driven Data Modeling · Business-aligned Retention · Active-window Design
+
+### Decision 27:slice_1 定时作业算力选型 —— Personal Compute,非 job cluster / serverless
+- **日期**:2026-06-01
+- **背景**:Phase 4 给 slice_1 上线每日调度时,首选 ephemeral autoscaling job cluster(成本最优、生产标准)。但 `databricks jobs` 重建后 Run 报 `PERMISSION_DENIED: not authorized to create clusters` —— workspace 禁用了「创建 cluster」权限(与此前 PAT 被禁属同一类组织管控)。
+- **决策**:定时作业改用已有权限的 Personal Compute(`existing_cluster_id`),已验证全绿上线。serverless 亦排除 —— notebook 04 用 `.cache()` 物化 ~10M 行 join,serverless 不支持 `.cache()`。
+- **Trade-off**:✅ 零等待、零审批,沿用已证明能跑的算力,管线立即上线;Personal Compute 跑完自动 terminate,闲时成本有界。 ❌ 失去「ephemeral job cluster」这一算力关键词;定时作业跑在 all-purpose cluster 上属轻度反模式。算力/成本优化叙事移至 Phase 6(Azure Container Apps 闲时缩到零)。
+- **复查条件**:若日后 workspace 放开 cluster 创建权限,或 notebook 04 重构去掉 `.cache()`,可切 job cluster 或 serverless 统一算力(job-cluster 配置已存于 git 历史)。
+- **关键词**:Platform Governance Constraint · Compute Selection Trade-off · Serverless `.cache()` Limitation · Pragmatic Delivery
 ---
 
 ## 6. 项目仓库
