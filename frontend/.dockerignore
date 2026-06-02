@@ -1,0 +1,8 @@
+# Exclude local build artifacts and secrets from the Docker build context.
+node_modules
+.next
+.git
+.env
+.env.*
+npm-debug.log*
+*.md
