@@ -5,8 +5,64 @@
 > 凡标 `⚠️【历史】` 的段落是过时/被推翻的旧版本,保留作演进记录,**判断现状以速览区为准**。
 
 ---
+# ═══════ 当前状态速览(2026-06-02)═══════
+## 🚦 两条线 + 平台栈状态
+| 线 | 状态 |
+|---|---|
+| Slice 1(Style × Channel quantity)| ✅ 过 trust gate(−1.51%,残差全归因),数据可信可用,team 可访问。**已上线每日调度**。replacement 精度待 metafield 异步重跑(不阻塞)|
+| Amazon ingestion | ✅ 全部完成(826 行,D25 completeness、D26 范围裁剪,冒烟测过,completion summary 已入库)|
+| **Phase 4 编排** | ✅ **全部完成** —— 7-task DAG 上线、DQ-as-Gate(Spark)、fault injection 验证、增量 MERGE(待 C/D/E 对账确认)、runbook |
+| **Phase 6 部署** | 🔄 进行中 —— 容器化✅、Terraform 地基待跑(6.3)、IT 给 SP 待回 |
+| Slice 2(Revenue page)| 📋 Slice 1 demo 后启动 |
+| page_view report | 📋 等 TW Web Analytics 接入(邮件已发)|
+
+## 📐 现行模型 = Decision 22 v3(不变)
+- `is_sales_attributable = NOT(is_exc_order OR is_replacement_order)`;refund 走行级净扣 `refunded_quantity`(全 restock_type 含 cancel);净销量 = quantity − refunded_quantity
+- replacement 信号 = Shopify `order_metafield` 表,notebook 04 已做表存在性自动检测 + 优雅降级
+
+## 🔢 fact 加载 = Decision 28(新,增量)
+- 全量改增量:watermark = Shopify `order.updated_at`(退款/改单会 bump,捕获晚到退款)+ 2 天 lookback;Delta MERGE upsert(key=`shopify_line_id`),非分区覆盖(退款回填老 iso_week)
+- `FULL_REFRESH` 开关切全量/增量(backfill);水位线表 `pipeline_watermark`
+- ⏳ **明天待办**:Step C 全量建基线 → D 切增量 → E 对账(`row_count==distinct_lines` 验证无重复)
+
+## 🔓 Open follow-ups
+**明天必做(增量验证)**:
+- [ ] notebook 04 增量版:全量建基线 → 增量跑 → 对账(C/D/E),通过后写 Decision 28 + 更新简历 §9 数字
+**Phase 6(等外部)**:
+- [ ] 6.3 Terraform apply(ACR/KeyVault/Log Analytics/Container Apps env)— 明天跑
+- [ ] IT 注册 Databricks service principal(连数据用,PAT 禁、U2M 无浏览器)— 邮件已发,等回
+- [ ] leader email 已发 IT 开 resource group ✅(`32D-ecom-rg`,eastus2,我 Owner)
+**Slice 1**:
+- [ ] 重跑 notebook 04 激活 `is_replacement_order`（metafield 到位后）→ 重新对账
+- [ ] Leader demo(script:`docs/demo/leader_demo_script.md`)
+
+## 🗂️ 已建表
+**Slice 1 四表**:dim_date 2,922 / dim_channel 23 / dim_product 36,828 / fact_orders_line ~9.97M（+ 新列 `order_updated_at`，增量水位线源）
+**新增**:`pipeline_watermark`（增量状态）/ `pipeline_run_history`（success digest 行数历史）
+**Amazon 三层**:amazon_silver_shipment_item 826 / amazon_silver_shipment 21 / amazon_gold_receiving_by_sku 826
+
+## 🛠️ 编排 / 部署资产（新）
+- Workflows job `slice_1_daily`（7-task,每日 06:30 ET,Personal Compute,Decision 27）+ `amazon_shipment_ingestion_weekly`
+- job JSON config-as-code:`databricks-workflows/`;DQ configs:workspace `slice_1/dq_configs/` + repo `metrics-service/data_quality/configs/`(两处同步)
+- 容器化:`frontend/Dockerfile`(standalone)+ `metrics-service/Dockerfile`(uv)+ 根 `docker-compose.yml`
+- IaC:`infra/`(Terraform — ACR/KeyVault/Log Analytics/Container Apps env,RG `32D-ecom-rg`/eastus2)
+- runbook:`docs/RUNBOOK.md`
+
+## 🔧 环境 cheat sheet
+- 项目根 `C:\Users\sia.song\analytics-platform` | GitHub sichensong-99/analytics-platform
+- Databricks catalog `mvdevdatabricks`,主 schema `analytics_platform_32degrees`
+- Shopify `shopify_32degrees` | TW `mvdev_federated_catalog.triple_whale` | ERS raw `mvdevdatabricks.32degrees.raw_uploads/ers/`
+- metrics-service:OAuth U2M(`.env` DATABRICKS_AUTH_TYPE=oauth,无 PAT)| 起后端 `cd metrics-service; uv run uvicorn app.main:app --reload`
+- Databricks CLI:`databricks jobs create/delete/list`(OAuth U2M 登录)
+- Azure CLI:`az login`(公司租户)| Terraform 在 `infra/`:`terraform init/plan/apply`
+- compute:Slice 1 notebook 用 classic(需 cache);Amazon 用 Serverless
+- 简历金句单一正源:`docs/RESUME_HIGHLIGHTS.md`(已加 §9)
+- Decision Log:`PROJECT_CONTEXT.md`(最新 D28 增量;D27 compute 选型)
 
 # ═══════ 当前状态速览(2026-06-01)═══════
+- Phase 4 ✅ 全部完成(slice_1 每日调度上线 + runbook + Decision 27);Step 5(fact 增量)parked 待补;进入 Phase 6,6.1 工具链 + Azure 访问验证中。
+
+- Phase 4 Step 1-2 ✅:Amazon job 已 config-as-code 入库;slice_1_daily 7-task DAG 手动跑通;DQ-as-Gate 已 Spark 化,首跑捕获并修复 fact null product_key(新增 dim_product Unknown member key=0 + fact coalesce,Kimball 一致化)。下一步 Step 3(fault injection + Slack)。
 ## 🚦 两条线状态
 | 线 | 状态 |
 |---|---|
