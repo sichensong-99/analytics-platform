@@ -1,0 +1,84 @@
+# infra/main.tf
+# Provisions the Azure foundation for the analytics platform into the EXISTING
+# resource group (32D-ecom-rg). Creates:
+#   - Azure Container Registry (ACR)  — stores the frontend/backend images
+#   - Key Vault                       — stores secrets (Databricks creds, JWT secret)
+#   - Log Analytics workspace         — required backing store for Container Apps logs
+#   - Container Apps Environment       — the runtime that hosts the two container apps
+#
+# The container apps themselves are added in Step 6.4, once images are pushed.
+
+terraform {
+  required_version = ">= 1.5"
+  required_providers {
+    azurerm = {
+      source  = "hashicorp/azurerm"
+      version = "~> 4.0"
+    }
+  }
+}
+
+provider "azurerm" {
+  features {}
+  subscription_id = var.subscription_id
+  resource_provider_registrations = "none"
+}
+
+# Reference the resource group IT already created (do not create it).
+data "azurerm_resource_group" "main" {
+  name = var.resource_group_name
+}
+
+# Current identity (you) — used to grant yourself Key Vault secret access.
+data "azurerm_client_config" "current" {}
+
+# ---------- Container Registry ----------
+resource "azurerm_container_registry" "acr" {
+  name                = var.acr_name
+  resource_group_name = data.azurerm_resource_group.main.name
+  location            = data.azurerm_resource_group.main.location
+  sku                 = "Basic"
+  admin_enabled       = true # simplest path for Container Apps to pull; revisit with managed identity later
+
+  tags = var.tags
+}
+
+# ---------- Log Analytics (backing store for Container Apps) ----------
+resource "azurerm_log_analytics_workspace" "logs" {
+  name                = "${var.prefix}-logs"
+  resource_group_name = data.azurerm_resource_group.main.name
+  location            = data.azurerm_resource_group.main.location
+  sku                 = "PerGB2018"
+  retention_in_days   = 30
+
+  tags = var.tags
+}
+
+# ---------- Container Apps Environment ----------
+resource "azurerm_container_app_environment" "env" {
+  name                       = "${var.prefix}-env"
+  resource_group_name        = data.azurerm_resource_group.main.name
+  location                   = data.azurerm_resource_group.main.location
+  log_analytics_workspace_id = azurerm_log_analytics_workspace.logs.id
+
+  tags = var.tags
+}
+
+# ---------- Key Vault ----------
+resource "azurerm_key_vault" "kv" {
+  name                       = var.key_vault_name
+  resource_group_name        = data.azurerm_resource_group.main.name
+  location                   = data.azurerm_resource_group.main.location
+  tenant_id                  = data.azurerm_client_config.current.tenant_id
+  sku_name                   = "standard"
+  enable_rbac_authorization  = true # use Azure RBAC for secret access (modern approach)
+
+  tags = var.tags
+}
+
+# Grant yourself "Key Vault Secrets Officer" so you can add/read secrets.
+resource "azurerm_role_assignment" "kv_admin" {
+  scope                = azurerm_key_vault.kv.id
+  role_definition_name = "Key Vault Secrets Officer"
+  principal_id         = data.azurerm_client_config.current.object_id
+}

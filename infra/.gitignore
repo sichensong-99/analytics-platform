@@ -1,0 +1,7 @@
+# Terraform — never commit state (may contain secrets) or local files.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+crash.log
+.terraform.lock.hcl
