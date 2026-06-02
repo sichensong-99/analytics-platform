@@ -1,0 +1,10 @@
+# Keep the build context small and avoid copying local-only / secret files.
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+.env
+.env.*
+*.md
+tests
+.git
