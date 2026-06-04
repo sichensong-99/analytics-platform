@@ -1,6 +1,11 @@
-# MAGIC **Run mode**: FULL REBUILD / BACKFILL only.
-# MAGIC Not for daily incremental loads. Incremental version (watermark +
-# MAGIC 2-day lookback) is implemented in Phase 4 — see phase4_orchestration_design.md.
+# MAGIC **Run mode**: INCREMENTAL (default) or FULL REBUILD / BACKFILL.
+# MAGIC Controlled by the FULL_REFRESH flag in section 1.
+# MAGIC - FULL_REFRESH = True  -> rebuild entire history, overwrite, reset watermark.
+# MAGIC - FULL_REFRESH = False -> incremental MERGE upsert by shopify_line_id,
+# MAGIC   reading only orders changed since (watermark - 2-day lookback).
+# MAGIC Watermark column: Shopify order.updated_at (bumped on refunds/edits, so
+# MAGIC late-arriving refunds are re-captured). Watermark state table:
+# MAGIC analytics_platform_32degrees.pipeline_watermark. See Decision 28.
 
 # Databricks notebook source
 # MAGIC %md
@@ -42,7 +47,7 @@
 # MAGIC ## 1. Configuration
 
 # COMMAND ----------
-
+FORCE_FULL_REFRESH = False
 from pyspark.sql import functions as F
 from pyspark.sql.window import Window
 
@@ -65,10 +70,63 @@ DIM_DATE = f"{TARGET_CATALOG}.{TARGET_SCHEMA}.dim_date"
 DIM_PRODUCT = f"{TARGET_CATALOG}.{TARGET_SCHEMA}.dim_product"
 DIM_CHANNEL = f"{TARGET_CATALOG}.{TARGET_SCHEMA}.dim_channel"
 
-# --- ETL window ---
-# Full rebuild mode. Do not use this daily unless intentionally rebuilding history.
+# --- ETL window (full-refresh lower bound) ---
 ETL_START = "2025-07-01"
 ETL_END = "2099-12-31"
+
+# =====================================================================
+# INCREMENTAL CONTROL (Decision 28)
+# =====================================================================
+# FULL_REFRESH = True  -> rebuild all history (overwrite), reset watermark.
+#                         Use for: first build, schema change, recovery.
+# FULL_REFRESH = False -> incremental MERGE upsert (daily default).
+#
+# Override at runtime from a Workflows task parameter:
+#   dbutils.widgets.text("full_refresh", "false")
+FULL_REFRESH = FORCE_FULL_REFRESH
+
+# Watermark state table — one row, tracks last successfully-loaded updated_at.
+WATERMARK_TABLE = f"{TARGET_CATALOG}.{TARGET_SCHEMA}.pipeline_watermark"
+WATERMARK_KEY = TARGET_TABLE          # "fact_orders_line"
+LOOKBACK_DAYS = 2                     # re-scan 2 days back to catch late arrivals
+
+# Grain key for MERGE upsert (one row per Shopify order line).
+MERGE_KEY = "shopify_line_id"
+
+print(f"[INFO] Run mode: {'FULL_REFRESH' if FULL_REFRESH else 'INCREMENTAL'}")
+
+# Ensure the watermark table exists (no-op if already there).
+spark.sql(f"""
+    CREATE TABLE IF NOT EXISTS {WATERMARK_TABLE} (
+        table_name      STRING,
+        last_watermark  TIMESTAMP,
+        updated_at      TIMESTAMP
+    ) USING DELTA
+""")
+
+# Read the current watermark for this table (None if first ever run).
+def _read_watermark():
+    rows = (
+        spark.table(WATERMARK_TABLE)
+        .filter(F.col("table_name") == F.lit(WATERMARK_KEY))
+        .select("last_watermark")
+        .collect()
+    )
+    return rows[0]["last_watermark"] if rows else None
+
+_current_wm = _read_watermark()
+
+# Compute the incremental lower bound on order.updated_at.
+# Full refresh OR no prior watermark -> go back to the beginning of history.
+if FULL_REFRESH or _current_wm is None:
+    INCR_FROM = None  # signals "no updated_at filter" downstream
+    if not FULL_REFRESH and _current_wm is None:
+        print("[WARN] No watermark found — first incremental run behaves as full build.")
+else:
+    from datetime import timedelta
+    INCR_FROM = _current_wm - timedelta(days=LOOKBACK_DAYS)
+    print(f"[INFO] Incremental lower bound (updated_at >= ): {INCR_FROM} "
+          f"(watermark {_current_wm} minus {LOOKBACK_DAYS}d lookback)")
 
 # --- DQ SLO thresholds ---
 DQ_CHANNEL_WARN_PCT = 0.005   # 0.5%
@@ -135,12 +193,29 @@ print(aoc.columns)
 
 print("[INFO] Preparing Shopify order lines ...")
 
+# Verify the watermark column exists on the Shopify order table.
+if "updated_at" not in [c.lower() for c in orders.columns]:
+    raise ValueError(
+        "Shopify 'order' table has no 'updated_at' column — cannot run "
+        f"incremental. Available columns: {orders.columns}"
+    )
+
+# INCREMENTAL: restrict orders to those changed since the lookback bound.
+# updated_at is bumped by refunds/edits, so this re-captures late refunds.
+orders_scoped = orders
+if INCR_FROM is not None:
+    orders_scoped = orders.filter(F.col("o.updated_at") >= F.lit(INCR_FROM))
+    print(f"[INFO] INCREMENTAL: orders filtered to updated_at >= {INCR_FROM}")
+else:
+    print("[INFO] FULL scan of orders (no updated_at filter)")
+
 ol_with_date = order_lines.join(
-    orders.select(
+    orders_scoped.select(
         F.col("o.id").alias("order_id_hdr"),
         F.col("o.name").alias("shopify_order_name"),
         F.col("o.processed_at").alias("processed_at"),
         F.col("o.financial_status").alias("financial_status"),
+        F.col("o.updated_at").alias("order_updated_at"),
     ),
     on=F.col("ol.order_id") == F.col("order_id_hdr"),
     how="inner",
@@ -221,9 +296,12 @@ ol_flagged = ol_filtered.withColumn(
 #                       replacements under-excluded until Fivetran sync).
 # When Fivetran delivers the table, NO code change is needed.
 
-ORDER_METAFIELD_TABLE = f"{SHOPIFY_CATALOG}.{SHOPIFY_SCHEMA}.order_metafield"
-REPLACEMENT_KEY = "replace_refund"
-REPLACEMENT_VALUE = '["Replace"]'
+# dpsync 框架把 order metafields 存成「宽表」（每单一行），不是 Fivetran 的
+# EAV（key/value/owner_id）。replacement 订单 = replace_refund == 'Replace'
+# （dpsync 已把 Shopify 的 ["Replace"] 拆成纯字符串 'Replace'）。
+ORDER_METAFIELD_TABLE = "dpsync.shopify_32degrees.order_metafield"
+REPLACEMENT_COL = "replace_refund"
+REPLACEMENT_VALUE = "Replace"
 
 def _table_exists(fq_name: str) -> bool:
     try:
@@ -240,11 +318,8 @@ if _has_mf_table:
 
     repl_order_ids = (
         order_mf
-        .filter(
-            (F.col("key") == F.lit(REPLACEMENT_KEY))
-            & (F.col("value") == F.lit(REPLACEMENT_VALUE))
-        )
-        .select(F.col("owner_id").alias("_repl_order_id"))
+        .filter(F.col(REPLACEMENT_COL) == F.lit(REPLACEMENT_VALUE))
+        .select(F.col("order_id").alias("_repl_order_id"))
         .distinct()
     )
     ol_flagged = (
@@ -254,13 +329,12 @@ if _has_mf_table:
         .withColumn("is_replacement_order", F.col("_repl_order_id").isNotNull())
         .drop("_repl_order_id")
     )
-    print(f"[INFO] is_replacement_order computed from order_metafield "
-          f"(key='{REPLACEMENT_KEY}', value='{REPLACEMENT_VALUE}')")
+    print(f"[INFO] is_replacement_order from {ORDER_METAFIELD_TABLE} "
+          f"({REPLACEMENT_COL} == '{REPLACEMENT_VALUE}')")
 else:
     ol_flagged = ol_flagged.withColumn("is_replacement_order", F.lit(False))
-    print(f"[WARN] {ORDER_METAFIELD_TABLE} NOT yet available — "
-          f"is_replacement_order defaults to FALSE (graceful degradation; "
-          f"replacements under-excluded until Fivetran sync completes)")
+    print(f"[WARN] {ORDER_METAFIELD_TABLE} NOT available — "
+          f"is_replacement_order defaults to FALSE")
 
 # --- union rule ------------------------------------------------------------
 ol_flagged = ol_flagged.withColumn(
@@ -527,7 +601,8 @@ fact_raw = (
         F.col("dd.iso_year"),
         F.col("dd.iso_week"),
 
-        # Lineage
+        # Lineage + incremental watermark source
+        F.col("order_updated_at"),
         F.current_timestamp().alias("_ingested_at"),
     )
     .cache()
@@ -548,7 +623,7 @@ print("[INFO] Running DQ checks in a single aggregation ...")
 dq_stats = fact_raw.agg(
     F.count("*").alias("total"),
     F.sum(F.when(F.col("channel_key") == 0, 1).otherwise(0)).alias("channel_unknown"),
-    F.sum(F.when(F.col("product_key").isNull(), 1).otherwise(0)).alias("product_null"),
+    F.sum(F.when(F.col("product_key") == 0, 1).otherwise(0)).alias("product_null"),
     F.sum(F.when(~F.col("is_sales_attributable"), 1).otherwise(0)).alias("excluded_rows"),
     F.sum("quantity").alias("gross_units"),
     F.sum("refunded_quantity").alias("refunded_units"),
@@ -570,15 +645,26 @@ print(f"[INFO] channel DQ — unknown: {channel_unknown:,} ({channel_unknown_pct
 print(f"[INFO] product DQ — unmatched: {product_null:,} ({product_null_pct:.3%})")
 
 # --- Channel DQ ---
+# NOTE: the FAIL threshold is a proportion calibrated on the FULL dataset
+# (large denominator). On an INCREMENTAL batch the denominator is only the
+# changed orders, so a handful of (legitimately) unmatched rows can inflate the
+# percentage past the threshold and cause a false block. Therefore: enforce the
+# hard gate on FULL_REFRESH; downgrade to a non-blocking WARN on incremental.
 if channel_unknown_pct >= DQ_CHANNEL_FAIL_PCT:
     print("[INFO] Top unknown channel source values:")
     fact_raw.filter(F.col("channel_key") == 0) \
         .groupBy("tw_channel_source", "channel_source_norm") \
         .count().orderBy(F.desc("count")).show(30, truncate=False)
-    raise AssertionError(
-        f"[FAIL] Channel match rate below SLO: {channel_unknown_pct:.3%} unmatched "
+    _channel_msg = (
+        f"Channel match rate below SLO: {channel_unknown_pct:.3%} unmatched "
         f"(threshold: {DQ_CHANNEL_FAIL_PCT:.1%}). Check dim_channel seed and TW source values."
     )
+    if FULL_REFRESH:
+        raise AssertionError(f"[FAIL] {_channel_msg}")
+    else:
+        print(f"[WARN] {_channel_msg}")
+        print("[WARN] Incremental batch has a small denominator, so the unmatched "
+              "percentage is inflated; not blocking. Full-refresh runs still enforce this gate.")
 elif channel_unknown_pct >= DQ_CHANNEL_WARN_PCT:
     print(f"[WARN] Channel unmatched rate {channel_unknown_pct:.3%} exceeds WARN "
           f"threshold {DQ_CHANNEL_WARN_PCT:.1%} — investigate but pipeline continues.")
@@ -586,14 +672,21 @@ else:
     print(f"[PASS] Channel DQ — {channel_unknown_pct:.3%} unmatched below WARN threshold")
 
 # --- Product DQ ---
+# Same full-vs-incremental rationale as Channel DQ above.
 if product_null_pct >= DQ_PRODUCT_FAIL_PCT:
     print("[INFO] Top unmatched product SKU values:")
-    fact_raw.filter(F.col("product_key").isNull()) \
+    fact_raw.filter(F.col("product_key") == 0) \
         .groupBy("sku_raw").count().orderBy(F.desc("count")).show(30, truncate=False)
-    raise AssertionError(
-        f"[FAIL] Product match rate below SLO: {product_null_pct:.3%} unmatched "
+    _product_msg = (
+        f"Product match rate below SLO: {product_null_pct:.3%} unmatched "
         f"(threshold: {DQ_PRODUCT_FAIL_PCT:.1%}). Check dim_product SKU coverage."
     )
+    if FULL_REFRESH:
+        raise AssertionError(f"[FAIL] {_product_msg}")
+    else:
+        print(f"[WARN] {_product_msg}")
+        print("[WARN] Incremental batch has a small denominator, so the unmatched "
+              "percentage is inflated; not blocking. Full-refresh runs still enforce this gate.")
 elif product_null_pct >= DQ_PRODUCT_WARN_PCT:
     print(f"[WARN] Product unmatched rate {product_null_pct:.3%} exceeds WARN "
           f"threshold {DQ_PRODUCT_WARN_PCT:.1%} — investigate but pipeline continues.")
@@ -623,20 +716,57 @@ fact_raw.groupBy(
 
 # COMMAND ----------
 
-print(f"[INFO] Writing to {FULL_TARGET} ...")
+from delta.tables import DeltaTable
 
-fact_to_write = fact_raw.repartition(NUM_WRITE_PARTITIONS)
+# Max updated_at in THIS batch -> the new watermark after a successful load.
+_batch_max_wm = fact_raw.select(F.max("order_updated_at").alias("m")).first()["m"]
 
-(
-    fact_to_write.write
-        .format("delta")
-        .mode("overwrite")
-        .option("overwriteSchema", "true")
-        .partitionBy("iso_year", "iso_week")
-        .saveAsTable(FULL_TARGET)
-)
+def _update_watermark(new_wm):
+    """Idempotently upsert the watermark for this table."""
+    if new_wm is None:
+        print("[WARN] Batch had no rows / no max updated_at — watermark unchanged.")
+        return
+    spark.sql(f"DELETE FROM {WATERMARK_TABLE} WHERE table_name = '{WATERMARK_KEY}'")
+    spark.createDataFrame(
+        [(WATERMARK_KEY, new_wm)],
+        "table_name string, last_watermark timestamp",
+    ).withColumn("updated_at", F.current_timestamp()) \
+     .write.mode("append").saveAsTable(WATERMARK_TABLE)
+    print(f"[INFO] Watermark for {WATERMARK_KEY} set to {new_wm}")
 
-print("[OK] Write complete")
+_target_exists = spark.catalog.tableExists(FULL_TARGET)
+
+if FULL_REFRESH or not _target_exists:
+    # -------- FULL REFRESH: overwrite entire table + reset watermark --------
+    print(f"[INFO] FULL_REFRESH write to {FULL_TARGET} ...")
+    fact_to_write = fact_raw.repartition(NUM_WRITE_PARTITIONS)
+    (
+        fact_to_write.write
+            .format("delta")
+            .mode("overwrite")
+            .option("overwriteSchema", "true")
+            .partitionBy("iso_year", "iso_week")
+            .saveAsTable(FULL_TARGET)
+    )
+    print("[OK] Full overwrite complete")
+    _update_watermark(_batch_max_wm)
+
+else:
+    # -------- INCREMENTAL: MERGE upsert by shopify_line_id --------
+    print(f"[INFO] INCREMENTAL MERGE into {FULL_TARGET} on {MERGE_KEY} ...")
+    delta_target = DeltaTable.forName(spark, FULL_TARGET)
+    (
+        delta_target.alias("t")
+        .merge(
+            fact_raw.alias("s"),
+            f"t.{MERGE_KEY} = s.{MERGE_KEY}",
+        )
+        .whenMatchedUpdateAll()
+        .whenNotMatchedInsertAll()
+        .execute()
+    )
+    print("[OK] MERGE complete")
+    _update_watermark(_batch_max_wm)
 
 # COMMAND ----------
 
@@ -674,7 +804,7 @@ else:
 print("[INFO] Releasing cached fact_raw ...")
 fact_raw.unpersist()
 
-print(f"\n[OK] fact_orders_line full rebuild completed — {total:,} rows prepared and written")
+print(f"\n[OK] fact_orders_line load completed ({'FULL_REFRESH' if FULL_REFRESH else 'INCREMENTAL'}) — {total:,} rows processed")
 
 # COMMAND ----------
 
@@ -695,9 +825,9 @@ print(f"\n[OK] fact_orders_line full rebuild completed — {total:,} rows prepar
 # MAGIC | EXC signal | `order.name LIKE '%EXC%'` (native) |
 # MAGIC | Refund — line-level netting via refunded_quantity (all restock types)
 # MAGIC | Replacement signal | PLACEHOLDER — pending Fivetran order metafield sync |
-# MAGIC | DQ SLO | Multi-tier PASS/WARN/FAIL |
+# MAGIC | DQ SLO | Multi-tier PASS/WARN/FAIL (hard gate on full-refresh; WARN-only on incremental) |
 # MAGIC | Performance | Cached `fact_raw`, single TW stats aggregation, single DQ aggregation, 32 write partitions |
 # MAGIC | Compute | Classic / Personal Compute |
 # MAGIC | Timezone | DST-aware `America/New_York` |
 # MAGIC | Partition | `iso_year`, `iso_week` |
-# MAGIC | Write mode | Full overwrite |
+# MAGIC | Write mode | Full overwrite (full-refresh) / MERGE upsert (incremental) |

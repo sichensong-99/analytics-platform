@@ -13,7 +13,10 @@ FROM node:20-slim AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-# Build-time public base URL (safe to bake; it's the browser-facing origin).
+# Build-time public base URL — baked into the client bundle by Next.js.
+# Passed in via `az acr build --build-arg NEXT_PUBLIC_BASE_URL=...`.
+ARG NEXT_PUBLIC_BASE_URL
+ENV NEXT_PUBLIC_BASE_URL=$NEXT_PUBLIC_BASE_URL
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 

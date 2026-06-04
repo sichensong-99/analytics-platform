@@ -396,6 +396,39 @@ v2 注(2026-05-26):TW 同事确认 TW Web Analytics 表覆盖 funnel(page view /
 - **Trade-off**:✅ 零等待、零审批,沿用已证明能跑的算力,管线立即上线;Personal Compute 跑完自动 terminate,闲时成本有界。 ❌ 失去「ephemeral job cluster」这一算力关键词;定时作业跑在 all-purpose cluster 上属轻度反模式。算力/成本优化叙事移至 Phase 6(Azure Container Apps 闲时缩到零)。
 - **复查条件**:若日后 workspace 放开 cluster 创建权限,或 notebook 04 重构去掉 `.cache()`,可切 job cluster 或 serverless 统一算力(job-cluster 配置已存于 git 历史)。
 - **关键词**:Platform Governance Constraint · Compute Selection Trade-off · Serverless `.cache()` Limitation · Pragmatic Delivery
+
+### Decision 28:fact_orders_line 增量加载 —— updated_at watermark + Delta MERGE
+- **日期**:2026-06-0X
+- **背景**:notebook 04 原为全量重写(每次重算 2025-07-01 至今),随数据增长跑时线性变长,且是初级做法。
+- **决策**:改为增量。水位线用 Shopify `order.updated_at`(退款/改单会 bump,故晚到退款能被重新捕获);每次从"水位线 − 2 天"读取(lookback 兜底同步延迟/晚到数据);用 **Delta MERGE**(key=`shopify_line_id`)做 upsert,而非分区覆盖——因为退款会回填老周(iso_week)数据,分区覆盖会漏。保留 `FULL_REFRESH` 开关做 backfill/recovery。
+- **Trade-off**:✅ 增量跑时从全量 18 min 降到数十秒;MERGE 天然处理退款回填;单一管线 + flag 切全量/增量是生产标准。 ❌ fact 新增一列 `order_updated_at`(水位线来源,亦为有用 lineage);MERGE 比 overwrite 略复杂。
+- **验证**:全量建基线后切增量,对账 row_count==distinct_lines(无重复)、total_qty/refunded 一致。
+- **关键词**:Incremental Pipeline · Delta MERGE Upsert · Watermark + Lookback · Late-arriving Data · Backfill Switch · Idempotent Load
+
+## Decision 29 — ACA scaling: backend min=1, frontend min=0
+Internal-ingress backend behind a synchronous frontend proxy + scale-to-zero =
+first request after idle eats full cold-start and fails (this was the root cause
+of the "non-JSON response" bug). Keep the backend warm (min=1); frontend still
+scales to zero. Explicit latency-vs-idle-cost trade-off.
+
+## Decision 30 — Three-mode Databricks auth behind DATABRICKS_AUTH_TYPE
+PAT / OAuth U2M / OAuth M2M selectable by one env var. M2M (service-principal
+client-credentials via credentials_provider + oauth_service_principal) for the
+headless container — U2M's browser flow can't run unattended; PAT is disabled
+org-wide. Requires databricks-sdk. U2M kept for local dev.
+
+## Decision 31 — Staged mock→live deployment
+Deploy the backend in mock mode first to validate the full cloud path
+(ingress / proxy / KV secrets / managed identity) decoupled from Databricks
+credentials; flip METRICS_DATA_SOURCE=databricks once the SP is ready. Reuses
+the dual-mode client.
+
+## Decision 32 — dpsync metafield: tap, don't migrate (yet)
+Use dpsync.shopify_32degrees.order_metafield for the replacement signal only
+(wide format: replace_refund=='Replace'), WITHOUT migrating the rest of the
+pipeline off Fivetran. Incremental adoption pending validation (historical
+backfill from 2025-07-01, schema stability, freshness SLA). notebook 04 §3b
+adapted from the assumed Fivetran EAV shape to the dpsync wide shape.
 ---
 
 ## 6. 项目仓库

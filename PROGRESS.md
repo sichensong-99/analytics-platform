@@ -5,6 +5,121 @@
 > 凡标 `⚠️【历史】` 的段落是过时/被推翻的旧版本,保留作演进记录,**判断现状以速览区为准**。
 
 ---
+# ═══════ 当前状态速览（更新于 2026-06-04）═══════
+
+## Phase 6 部署 / 真数据上线
+
+* **6.5 ✅ 完成**：real data 已在部署后的 Azure Container Apps stack 中上线
+
+  * M2M service principal 已端到端跑通 ✅
+  * Dashboard 已显示真实数据 / real numbers ✅
+  * Phase 6.5 状态：**real data LIVE in deployed ACA stack** ✅
+
+## Phase 4.5 Streaming
+
+* **Phase 4.5 ✅ code-complete + running**
+
+  * Streaming pipeline 已完成并运行中 ✅
+  * P1 hardening 已完成：
+
+    * dedup 已加 ✅
+    * exactly-once / checkpoint recovery 已验证 ✅
+  * 已支持 **流批一体**：
+
+    * 通过 `RUN_MODE` 参数切换执行模式 ✅
+    * `stream` = 持续实时跑
+    * `backfill` = 处理现存数据后停止
+  * 当前状态：**code-complete + running + P1 verified + RUN_MODE supported** ✅
+
+## Phase 5 Platformization
+
+* **Phase 5 ✅ code-complete**
+
+  * Catalog 已完成 ✅
+  * Lineage 已完成 ✅
+  * mock 模式下 Catalog + Lineage 验证 OK ✅
+  * Redis benchmark vs real query：pending
+
+## Cost / ROI
+
+* **Cost / ROI report ✅ done**
+
+  * 成本 / ROI 报告已完成 ✅
+
+## Open / Pending
+
+* **Cal backfill → re-reconcile**
+
+  * 当前差异：`−1.51%`
+  * 目标重新 reconcile 后预计：`~−1.7%`
+
+* **New-stack cost**
+
+  * 需要基于 representative month 重新计算新 stack 成本
+
+* **Chaos-generator swap**
+
+  * 待完成
+
+* **Redis benchmark vs real query**
+
+  * 待完成
+  * Phase 5 中 Redis benchmark 仍需对真实查询表现做对比
+
+* **Report-filtering → Slice 2**
+
+  * 待推进到 Slice 2
+
+* **Leader demo + README + blog**
+
+  * 待准备 leader demo
+  * 待完善 README
+  * 待写 blog
+
+# ═══════ 当前状态速览（更新于 2026-06-03）═══════
+
+## Phase 6 部署
+- **6.4 ✅ 完成**：两个 Container App 上线（ACA / RG 32D-ecom-rg / eastus2）
+  - frontend：external ingress, **min=0**, port 3000
+  - metrics-service：internal ingress, **min=1**(为修冷启动改的), port 8000
+  - 镜像 `az acr build` 云端构建；passwordless 用 user-assigned identity `ap32d-aca-identity`（AcrPull + KV Secrets User）
+  - secret 走 Key Vault 引用（`ap32d-kv`）：jwt-secret ✅；databricks-client-id / -secret = 占位待真值
+  - **mock 模式端到端跑通 = 可演示的成品** ✅
+- **6.5 真数据（M2M）= 卡外部，未完成**
+  - 后端 env 已配好（databricks / oauth-m2m / 真 hostname+path / client 凭据 secretref），但**当前临时切回 mock 让它能跑**
+  - 镜像已就绪：`metrics-service:v2`（含 `databricks-sdk` + oauth-m2m 分支）
+  - **等 Lee（account admin）两样**：① 生成 SP `32_degrees` 的 OAuth secret → client_id + secret；② 给 SP 数据权限（CAN USE warehouse + SELECT analytics_platform_32degrees）。已回复 Lee。
+  - 我**不是** account admin（进不去 SP 管理页）；正确 account console = `accounts.cloud.databricks.com`（不是 azuredatabricks.net）
+  - **凭据+权限到位后照这几条切（PARKED）**：
+```powershell
+    az keyvault secret set --vault-name ap32d-kv --name databricks-client-id --value "<Lee给的>" -o none
+    az keyvault secret set --vault-name ap32d-kv --name databricks-client-secret --value "<Lee给的>" -o none
+    az containerapp update -n metrics-service -g 32D-ecom-rg --set-env-vars "METRICS_DATA_SOURCE=databricks" --revision-suffix m2mlive
+    az containerapp logs show -n metrics-service -g 32D-ecom-rg --tail 100
+```
+
+## 数据侧
+- **DQ 残留已修**：DQ-as-Gate 在 06:30 定时跑里拦下 1 个 null product_key（fail-closed）。根因=旧版（加 coalesce 前）跑留下的残留行（updated_at 2025-05-28，落在每日增量窗口外，故增量永不重碰）。**notebook 04 本身无 bug**（coalesce 正确）。hotfix：`UPDATE ... SET product_key=0 WHERE product_key IS NULL`（Unknown member key=0 已存在）。
+- **dpsync 框架（Cal 新建，替代 Fivetran）**：`dpsync.shopify_32degrees.order_metafield` 有 replace_refund 列 → **是宽表，不是 Fivetran EAV(key/value/owner_id)**。值分布：Replace 224 / Refund 266 / Gift Card 52 / null 139。**replacement 信号 = replace_refund=='Replace'**。
+  - notebook 04 §3b 已适配宽表（指向 dpsync 表）。
+  - **等 Cal backfill 2025-07-01+** → 再 full refresh + 重新对账（预期 −1.51% → ~−1.7%）。已邮件请 Cal backfill。
+
+## 关键基础设施 ID（别再重新发现）
+- ACR `analyticsplatform32dacr.azurecr.io`｜ACA env `analytics-platform-env`（domain `redhill-e43933ed.eastus2.azurecontainerapps.io`）｜KV `ap32d-kv`｜RG `32D-ecom-rg`/eastus2｜sub `bef25ab0-...`｜identity `ap32d-aca-identity`
+- 后端 internal FQDN：`metrics-service.internal.redhill-e43933ed.eastus2.azurecontainerapps.io`
+- 前端公网：`https://analytics-frontend.redhill-e43933ed.eastus2.azurecontainerapps.io`
+- 镜像：`analytics-frontend:v1`｜`metrics-service:v2`
+- Databricks workspace host `dbc-620cc0fc-b4ee.cloud.databricks.com`｜warehouse http_path `/sql/1.0/warehouses/39f94dd6ed9a78a4`
+
+## 人
+- **Lee Tepper**（lee.tepper@wpmv.com）：建了 SP `32_degrees`、account admin、管 SP 凭据 + 数据权限
+- **Cal Peyser**：建 dpsync 框架、也有 account console 访问
+
+## 下一步（新 chat 开局）
+1. 等 Lee 给 SP secret + 数据权限 → 跑 PARKED 命令切真数据 → 看真 dashboard
+2. 等 Cal backfill → full refresh + 重新对账（replacement）
+3. 真数据通后 Phase 6 收尾：成本报告、文档、blog、README、简历定稿
+
 # ═══════ 当前状态速览(2026-06-02)═══════
 ## 🚦 两条线 + 平台栈状态
 | 线 | 状态 |

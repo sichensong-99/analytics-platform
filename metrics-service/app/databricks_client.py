@@ -4,14 +4,19 @@ Databricks Client
 Phase 2A: mock-only.
 Day 4 (Slice 1): real Databricks SQL Warehouse connection added.
 2026-05-28: snapshot metrics (statuses/fcs filters) + Amazon mock added.
+2026-06-02: OAuth M2M (service principal) auth added for the headless
+            container deploy (Phase 6.5).
 
 Mode is controlled by METRICS_DATA_SOURCE env var:
   - "databricks": query the real SQL Warehouse (default)
   - "mock":       return mock data (offline dev / demo fallback)
 
 Auth is controlled by DATABRICKS_AUTH_TYPE env var:
-  - "oauth": browser-based user login (no PAT needed; default)
-  - "pat":   personal access token via DATABRICKS_TOKEN
+  - "oauth":     browser-based user login / U2M (local dev; default).
+                 Cannot run headless — there is no browser in a container.
+  - "oauth-m2m": service-principal client-credentials / M2M (headless cloud).
+                 Reads DATABRICKS_CLIENT_ID + DATABRICKS_CLIENT_SECRET.
+  - "pat":       personal access token via DATABRICKS_TOKEN.
 """
 
 import os
@@ -54,8 +59,31 @@ def _build_connect_kwargs() -> dict[str, Any]:
     }
 
     if auth_type == "pat":
+        # Personal access token (disabled by our org; kept for completeness).
         connect_kwargs["access_token"] = os.environ["DATABRICKS_TOKEN"]
+
+    elif auth_type in ("oauth-m2m", "m2m"):
+        # OAuth machine-to-machine: service-principal client-credentials.
+        # The only flow that works headless in a container (U2M needs a
+        # browser; PAT is disabled org-wide). Used by the cloud deploy (6.5).
+        # Requires databricks-sdk (already a dependency of the SQL connector).
+        from databricks.sdk.core import Config, oauth_service_principal
+
+        client_id = os.environ["DATABRICKS_CLIENT_ID"]
+        client_secret = os.environ["DATABRICKS_CLIENT_SECRET"]
+
+        def _sp_credential_provider():
+            config = Config(
+                host=f"https://{hostname}",
+                client_id=client_id,
+                client_secret=client_secret,
+            )
+            return oauth_service_principal(config)
+
+        connect_kwargs["credentials_provider"] = _sp_credential_provider
+
     else:
+        # OAuth user-to-machine: browser-based login (local dev only).
         connect_kwargs["auth_type"] = "databricks-oauth"
 
     return connect_kwargs

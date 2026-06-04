@@ -15,6 +15,11 @@ from pydantic import BaseModel
 from app.auth import UserPayload, get_current_user
 from app.databricks_client import run_query
 from app.metrics_loader import get_metric, list_metrics
+from app.routers.realtime import router as realtime_router
+
+from app.routers.catalog import router as catalog_router
+from app.routers.lineage import router as lineage_router
+from app.cache import cached_query, make_key
 
 
 # ============ App init ============
@@ -25,6 +30,9 @@ app = FastAPI(
     version="0.2.0",
 )
 
+app.include_router(realtime_router)
+app.include_router(catalog_router)
+app.include_router(lineage_router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -169,7 +177,10 @@ def query_metric(
         "styles": styles,
     }
 
-    rows = run_query(metric["sql"], params)
+    rows = cached_query(
+    make_key(f"snapshot:{metric_id}", params),
+    lambda: run_query(metric["sql"], params)
+)
 
     return MetricResponse(
         metric_id=metric_id,
@@ -218,7 +229,10 @@ def query_snapshot_metric(
         "fcs": fcs,
     }
 
-    rows = run_query(metric["sql"], params)
+    rows = cached_query(
+    make_key(metric_id, params),
+    lambda: run_query(metric["sql"], params)
+)
 
     return SnapshotResponse(
         metric_id=metric_id,

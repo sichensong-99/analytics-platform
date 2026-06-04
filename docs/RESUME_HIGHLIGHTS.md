@@ -110,13 +110,21 @@ scanned, reconciliation −1.51% with 100% itemized residual.
 
 - **Data serving layer**: standalone FastAPI metrics service decoupling metric
   definition from consumption (vs Next.js querying the warehouse directly).
+
 - **YAML-driven metric DSL**: new metrics with zero code changes.
+
 - **Time-series vs snapshot query patterns**: distinct `/metrics/{id}`
   (date-windowed) and `/snapshot/{id}` (current-state) endpoints.
+
 - **mock/databricks dual-mode client**: frontend dev & demo unblocked when the
   warehouse is unavailable (proved its value during a SQL-access outage).
+
 - **OAuth U2M auth** to Databricks SQL Warehouse after org disabled PATs;
   connection caching to avoid re-auth on every query.
+
+- **⏳ Three-mode auth behind one toggle (PAT / OAuth U2M / OAuth M2M)**: M2M
+  service-principal for the headless container (U2M's browser consent can't run
+  unattended); connection reset-on-failure doubles as automatic token refresh.
 
 ## 8. 流程 / 方法论
 
@@ -128,6 +136,83 @@ scanned, reconciliation −1.51% with 100% itemized residual.
   rather than guessing; same discipline caught the Appaman connector misconfig
   and TW backfill gaps within hours.
 
+## 9. 编排 / 部署 / 增量 (Phase 4 + 6)
+
+* **Production orchestration (Databricks Workflows)**: 7-task DAG with parallel
+  dimension builds fanning into the fact, a quality gate, and a stakeholder
+  digest — fan-out/fan-in dependency design with per-task retries and
+  email-on-failure.
+
+* **DQ-as-Gate, Spark-native**: the same versioned YAML check specs used for
+  local unit testing are executed in Spark against the ~10M-row fact (cannot
+  `.toPandas()`), gating downstream tasks; a hard failure fails the gate task
+  and skips all consumers (fail-closed). Severity-calibrated (integrity → FAIL,
+  domain/freshness → WARN) to avoid false blocks.
+
+* **Validated fail-closed behavior via fault injection**: deliberately injected
+  a failing check and confirmed the gate blocked and downstream tasks skipped —
+  observability proven, not assumed.
+
+* **Gate caught a real defect on first run**: surfaced a NULL `product_key`
+  (an order line whose SKU was absent from the product master); fixed Kimball-
+  correctly by adding a conformed Unknown member (surrogate key 0) and
+  coalescing unmatched fact lookups to it, rather than allowing NULL FKs.
+
+* **Config-as-code orchestration**: jobs defined as version-controlled JSON,
+  deployed via the Databricks CLI — jobs are reproducible from the repo, not
+  hand-built in the UI.
+
+* **Incremental load with watermark + Delta MERGE**: converted the fact from
+  full-overwrite to incremental upsert keyed on `shopify_line_id`, using
+  Shopify `order.updated_at` as the watermark (bumped by refunds/edits, so
+  late-arriving refunds are re-captured) with a 2-day lookback for sync lag;
+  chose MERGE over partition-overwrite because refunds back-fill prior ISO-week
+  partitions. Cuts a refresh from ~18 min (full) to seconds (incremental).
+
+* **Backfill switch**: a single `FULL_REFRESH` flag toggles full-rebuild vs
+  incremental in one pipeline — one source of truth plus on-demand backfill,
+  instead of two parallel notebooks.
+
+* **Operational runbook**: documented DAG, schedule, gate semantics, per-task
+  failure response, and rerun/backfill procedures (Repair-run vs full run).
+
+* **Pragmatic compute governance**: scheduled jobs run on a governed single-user
+  cluster after the workspace disabled the cluster-creation entitlement and
+  `.cache()` ruled out serverless — documented as an explicit trade-off
+  (Decision 27), with the job-cluster config retained in git history.
+
+* **Containerization**: multi-stage Docker builds for the Next.js frontend
+  (standalone output) and FastAPI backend (uv), wired together with
+  docker-compose for local end-to-end testing.
+
+* **Infrastructure-as-Code (Terraform)**: Azure foundation — Container Registry,
+  Key Vault (RBAC-authorized), Log Analytics, and a Container Apps environment —
+  provisioned into a governed resource group, with cost-center tags on all
+  resources for FinOps attribution.
+
+* **Deployed to Azure Container Apps**: public external-ingress Next.js frontend +
+  internal-ingress FastAPI backend (least-exposure, server-side proxy only).
+  Images built cloud-side via `az acr build`.
+
+* **Passwordless auth via one user-assigned managed identity**: the same identity
+  provides `AcrPull` on the private registry and `Key Vault Secrets User` access —
+  no registry passwords or secrets in any config.
+
+* **Runtime Key Vault secret resolution**: app secrets are resolved at runtime from
+  Key Vault via the managed identity, with no secret values stored in container
+  definitions or environment-variable values.
+
+* **Scale-to-zero / FinOps**: the frontend scales to zero when idle; the lightweight
+  backend is kept warm with `min=1` to avoid cold-start latency on synchronous
+  internal proxy calls — an explicit latency-vs-idle-cost trade-off.
+
+* **Build-time vs runtime config discipline (Next.js)**: the browser-facing origin
+  is baked at image build via `NEXT_PUBLIC_*`, while the backend URL is injected at
+  runtime — avoiding frontend rebuilds whenever the backend address changes.
+
+* **⏳ Staged mock→live cutover**: validated the full cloud stack in mock mode first,
+  then cut to live data via one env flip plus a secret reference.
+
 ---
 
 ## 待补(后续整理进上面)
@@ -135,7 +220,7 @@ scanned, reconciliation −1.51% with 100% itemized residual.
 - legacy_panoply_etl.md §0.2 的 13 个亮点(Multi-key resolution / Responsibility
   attribution model / REGEXP free-text extraction / PERCENTILE_CONT 等)还没并进来
 - page_view #14 anti-bulk-bias 过滤 / #15 customer cohort classification
-- Phase 4 / 4.5 / 5 / 6 完成后的关键词(Workflows / Streaming / Redis / FinOps)
+- Phase 4 + 6(部分)已并入 §9。Streaming(4.5)/ Redis(5)待后续
 
 ---
 
