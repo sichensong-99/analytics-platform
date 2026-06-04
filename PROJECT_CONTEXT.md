@@ -429,6 +429,52 @@ Use dpsync.shopify_32degrees.order_metafield for the replacement signal only
 pipeline off Fivetran. Incremental adoption pending validation (historical
 backfill from 2025-07-01, schema stability, freshness SLA). notebook 04 §3b
 adapted from the assumed Fivetran EAV shape to the dpsync wide shape.
+
+## Decision 33 — Phase 4.5 real-time streaming module
+Auto Loader (`cloudFiles`) tails a Unity Catalog Volume into streaming silver Delta
+tables (explicit schema + schemaLocation). A stream-stream **LEFT** join
+(ads ⟕ orders on `order_id`, bounded by a time-range condition, watermark-controlled
+state) deliberately keeps unmatched / no-conversion ad spend so a ROAS crash isn't
+silently dropped (an inner join would drop it). A 5-min / 1-min sliding window
+aggregates per-channel ROAS; a window is flagged anomalous vs the channel's **own
+recent healthy baseline** (self-calibrating, not a brittle fixed threshold). Writes
+via **foreachBatch + Delta MERGE** (one row per channel × window, updated live).
+Dedup via `dropDuplicatesWithinWatermark` + checkpoints + the Delta sink =
+effectively exactly-once (verified by killing and restarting the stream). The Delta
+streaming source uses `skipChangeCommits=true` (robust to test-time table rewrites);
+the dedup-hardened ingest uses a separate checkpoint (`_checkpoints_p1`) because
+changing a query's stateful operators is checkpoint-incompatible. A simulated event
+generator injects duplicates + out-of-order events so dedup / late-handling are
+demonstrable.
+
+## Decision 34 — 流批一体 via a single RUN_MODE flag
+The same Structured Streaming code runs as a live stream or a one-shot batch by
+switching only the trigger: `RUN_MODE=stream` → `trigger(processingTime="30 seconds")`
+(continuous); `RUN_MODE=backfill` → `trigger(availableNow=True)` (process all available
+data, then stop). One logic, two execution modes — the streaming-side analogue of
+Phase 4's `FULL_REFRESH` batch flag (Decision 28). Exposed as a Databricks job widget
+so the mode is a job parameter.
+
+## Decision 35 — Phase 5 platformization (Catalog + Lineage + Redis)
+Three platform-layer capabilities on top of the existing stack. (1) **Metrics Catalog**:
+an endpoint + page surfacing every metric's definition / grain / version / changelog
+from the YAML DSL — self-service discovery, one browsable source of truth. (2) **Data
+lineage + impact analysis**: a curated lineage config (declared now; externalize to a
+lineage.yaml later) rendered as an interactive ECharts DAG; clicking a node traces its
+full upstream + downstream. (3) **Redis cache-aside**: metric results cached with a TTL
+keyed on metric + params, with **graceful degradation** (Redis unreachable → fall back
+to a direct query, never a hard dependency).
+
+## Decision 36 — Cost/ROI framing: honesty over inflation
+The cost story leads with the substantiated number — the Panoply optimization
+($2,499 → $1,799/mo, ~28%, ~$8.4K/yr run-rate, owner-driven via ingestion-frequency
+tuning + dropping unused tables). Power BI is 16 Premium-Per-User licenses ($3,840/yr) —
+the real, verifiable figure, **not inflated** (an interviewer will ask the user count).
+The Redis "~70% cost reduction" is framed as a **cache-hit-rate estimate** (no production
+traffic to measure real hit rate), not a measured fact. New-stack net savings are
+deferred until a representative production month, and Databricks is partly shared with a
+separate Costco workload, so its cost is allocated carefully rather than fully charged to
+this project.
 ---
 
 ## 6. 项目仓库

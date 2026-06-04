@@ -7,74 +7,46 @@
 ---
 # ═══════ 当前状态速览（更新于 2026-06-04）═══════
 
-## Phase 6 部署 / 真数据上线
+## 🎉 里程碑：真数据上线（Phase 6.5 ✅）
+- **M2M service principal 端到端跑通**，部署的 ACA 栈现在服务**真实数据**（dashboard 显示真数）。
+- Lee 完成 SP `32_degrees` 的 workspace assignment + warehouse Can-use；UC SELECT 已授；照 PARKED 命令 KV 填真值 + ACA 翻 `METRICS_DATA_SOURCE=databricks`（新 revision）切通。
+- **这使下方 2026-06-03 速览里「6.5 卡外部」那段作废 → 已解决。**
 
-* **6.5 ✅ 完成**：real data 已在部署后的 Azure Container Apps stack 中上线
+## Phase 4.5 流式模块 ✅ 代码完成 + 跑通
+- 6 文件：生成器、Auto Loader 摄入+去重、stream-stream join、窗口+异常(foreachBatch/MERGE)、FastAPI endpoint、实时大屏。
+- P1 全做：`dropDuplicatesWithinWatermark` / exactly-once（停-重启验证过）/ watermark 乱序 / **流批一体（`RUN_MODE` flag：stream / backfill）**。
+- 跑法：演示时 00 + 02/03/04 一起开 **stream 模式**约 15 分钟看 facebook 飘红，然后 `q_xxx.stop()` 全停（**别 24h 挂着烧钱**）。正常 append、checkpoint 保证不重不漏；改代码换 checkpoint 重跑会产生测试重复数据（不影响功能，要干净就清 _checkpoints* + TRUNCATE 4 张演示表后重跑）。
+- 03 读 silver 用 `skipChangeCommits=true`（对测试期表重写鲁棒）；P1 dedup 用独立 `_checkpoints_p1`。
+- **待办**：① 00 换成 `generate_events_chaos.py`（让去重/乱序可演示）；② 02/03/04 接 `add_trigger`(RUN_MODE) 写法。
 
-  * M2M service principal 已端到端跑通 ✅
-  * Dashboard 已显示真实数据 / real numbers ✅
-  * Phase 6.5 状态：**real data LIVE in deployed ACA stack** ✅
+## Phase 5 平台化 ✅ 代码完成
+- Metrics Catalog（`catalog.py` + `MetricsCatalog.tsx`，读 definitions.yaml，自助指标发现）。
+- Lineage 血缘可视化（`lineage.py` + `LineageGraph.tsx`，ECharts 有向图 + 点节点做影响分析）。
+- Redis 缓存（`cache.py` + `bench_cache.py`，cache-aside + TTL + 优雅降级）。
+- **待办**：① Redis benchmark 接真查询拿延迟数字；② catalog/cache 接真仓时复用现有连接（届时把 `main.py` / `databricks_client.py` 给 Claude）。
 
-## Phase 4.5 Streaming
+## 成本 / ROI ✅ 报告完成（`COST_ROI_REPORT.md`，本地）
+- 老栈基线：Panoply $1,799/mo + 16× PPU $320/mo ≈ **$25K/yr**；新栈 Azure 至今仅 $0.65（mock 早期、无真实负载）。
+- **金句 = Panoply 优化**：$2,499 → $1,799/mo（~28%，~$8.4K/yr，**你做的**，靠调采集频率 + 砍冗余表）。
+- ⚠️ 诚实口径：PBI 16 人是真数**别虚报**；Redis「70%」是命中率**估算**要标注；新栈净省**待代表性月份**（且 Databricks 与 Costco 共用，需分摊）。
 
-* **Phase 4.5 ✅ code-complete + running**
+## 数据侧（不变）
+- DQ 残留 null product_key 已 hotfix（notebook 04 无 bug）。
+- dpsync `order_metafield` 宽表（`replace_refund=='Replace'` = replacement），notebook 04 §3b 已适配；**等 Cal backfill 2025-07-01+** → full refresh + 重新对账（预期 −1.51% → ~−1.7%）。
 
-  * Streaming pipeline 已完成并运行中 ✅
-  * P1 hardening 已完成：
+## 下一步（新 chat 开局）
+1. **git push**（好久没更新；注意 **别推 `.env` / SP secret**，先查 `git status` + `.gitignore`）
+2. 收尾：**leader demo** + **README 门面** + **旗舰博客（对账证伪，`BLOG_OUTLINE.md` 已有大纲）**
+3. （你拍板）**report 筛选** → Slice 2(revenue) / Slice 3(cohort)
+4. 等 **Cal backfill** → 重新对账
+5. 新栈成本：取一个有真实负载的整月再算净省
 
-    * dedup 已加 ✅
-    * exactly-once / checkpoint recovery 已验证 ✅
-  * 已支持 **流批一体**：
+## 本轮新增文件清单（确认进 git）
+- **4.5**：`generate_events_chaos.py`（替 `generate_events.py`）、`02_autoloader_ingest.py`、`03_stream_join.py`、`04_gold_anomaly.py`、`realtime.py`（→ `app/routers/`）、`ChannelHealthDashboard.tsx`
+- **5**：`catalog.py`、`lineage.py`、`cache.py`、`bench_cache.py`、`MetricsCatalog.tsx`、`LineageGraph.tsx`
+- **文档（本地，别推公开 repo）**：`COST_ROI_REPORT.md`、`PROJECT_AUDIT_AND_HANDOFF.md`、`BLOG_OUTLINE.md`
 
-    * 通过 `RUN_MODE` 参数切换执行模式 ✅
-    * `stream` = 持续实时跑
-    * `backfill` = 处理现存数据后停止
-  * 当前状态：**code-complete + running + P1 verified + RUN_MODE supported** ✅
-
-## Phase 5 Platformization
-
-* **Phase 5 ✅ code-complete**
-
-  * Catalog 已完成 ✅
-  * Lineage 已完成 ✅
-  * mock 模式下 Catalog + Lineage 验证 OK ✅
-  * Redis benchmark vs real query：pending
-
-## Cost / ROI
-
-* **Cost / ROI report ✅ done**
-
-  * 成本 / ROI 报告已完成 ✅
-
-## Open / Pending
-
-* **Cal backfill → re-reconcile**
-
-  * 当前差异：`−1.51%`
-  * 目标重新 reconcile 后预计：`~−1.7%`
-
-* **New-stack cost**
-
-  * 需要基于 representative month 重新计算新 stack 成本
-
-* **Chaos-generator swap**
-
-  * 待完成
-
-* **Redis benchmark vs real query**
-
-  * 待完成
-  * Phase 5 中 Redis benchmark 仍需对真实查询表现做对比
-
-* **Report-filtering → Slice 2**
-
-  * 待推进到 Slice 2
-
-* **Leader demo + README + blog**
-
-  * 待准备 leader demo
-  * 待完善 README
-  * 待写 blog
+---
 
 # ═══════ 当前状态速览（更新于 2026-06-03）═══════
 

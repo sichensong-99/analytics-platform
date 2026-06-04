@@ -2,7 +2,7 @@
 
 > 投简历 / 面试前只看这一个文件。按主题组织,每条含可直接用的英文 bullet。
 > 详细出处见各 daily log / decision log / completion summary。
-> Last updated: 2026-05-28
+> Last updated: 2026-06-04
 
 ---
 
@@ -122,9 +122,11 @@ scanned, reconciliation −1.51% with 100% itemized residual.
 - **OAuth U2M auth** to Databricks SQL Warehouse after org disabled PATs;
   connection caching to avoid re-auth on every query.
 
-- **⏳ Three-mode auth behind one toggle (PAT / OAuth U2M / OAuth M2M)**: M2M
-  service-principal for the headless container (U2M's browser consent can't run
-  unattended); connection reset-on-failure doubles as automatic token refresh.
+- **✅ Three-mode auth behind one toggle (PAT / OAuth U2M / OAuth M2M)**: the M2M
+  service-principal powers the headless container (U2M's browser consent can't run
+  unattended). **Now running in production** — the deployed Azure Container Apps
+  stack serves live data via the service principal. Connection reset-on-failure
+  doubles as automatic token refresh.
 
 ## 8. 流程 / 方法论
 
@@ -210,8 +212,72 @@ scanned, reconciliation −1.51% with 100% itemized residual.
   is baked at image build via `NEXT_PUBLIC_*`, while the backend URL is injected at
   runtime — avoiding frontend rebuilds whenever the backend address changes.
 
-* **⏳ Staged mock→live cutover**: validated the full cloud stack in mock mode first,
-  then cut to live data via one env flip plus a secret reference.
+* **✅ Staged mock→live cutover**: validated the full cloud stack in mock mode first,
+  then cut to live data via one env flip plus a Key Vault secret reference — the
+  deployed app now serves real numbers from the Databricks Lakehouse.
+
+## 10. 流式处理 (Phase 4.5 — real-time)
+
+* **Auto Loader incremental file ingestion**: `cloudFiles` tailing a Unity Catalog
+  Volume into streaming Delta tables, with an explicit schema + schema-location
+  tracking (no inference guesswork).
+
+* **Stream-stream join with watermark state-control**: ads ⟕ orders joined on
+  `order_id` within a time-range condition; a **LEFT** join deliberately retains
+  unmatched (no-conversion) ad spend so a ROAS crash can't be silently dropped —
+  the watermark bounds join state so it can't grow unbounded.
+
+* **Exactly-once + dedup**: checkpoints + the Delta sink give exactly-once;
+  `dropDuplicatesWithinWatermark` upgrades an at-least-once source to
+  effectively-once. Verified by killing and restarting the stream (no dup / no loss).
+
+* **5-min sliding-window real-time anomaly detection**: per-channel ROAS windowed
+  (5-min window, 1-min slide); a channel is flagged when ROAS drops below ~50% of
+  its **own recent healthy baseline** (self-calibrating), not a brittle fixed threshold.
+
+* **foreachBatch + Delta MERGE upsert**: each micro-batch applies the anomaly rule
+  then upserts into a gold table — one row per (channel, window), updated live —
+  the production pattern for streaming-to-curated-table writes.
+
+* **流批一体 (batch/stream unification)**: a single `RUN_MODE` flag selects
+  `trigger(availableNow=True)` (batch / backfill) vs `processingTime` (continuous)
+  on the **same** Structured Streaming code — one logic, two execution modes.
+
+* **Robust Delta streaming source**: reads upstream silver with
+  `skipChangeCommits=true` so test-time table rewrites don't fail the stream.
+
+* **Real-time dashboard**: Next.js + ECharts polling the serving API, with
+  anomalous channels highlighted live.
+
+## 11. 平台化 / 治理 (Phase 5)
+
+* **Metrics Catalog (semantic layer / self-service discovery)**: an endpoint + page
+  surfacing every metric's definition, grain, version, and changelog from the YAML
+  DSL — one browsable source of truth for metric semantics.
+
+* **Data lineage + impact analysis**: a source → silver → fact/dim → metric →
+  dashboard DAG rendered as an interactive ECharts graph; clicking a node traces its
+  full upstream + downstream (what a table change would impact).
+
+* **Redis cache-aside layer**: metric results cached with a TTL keyed on
+  metric + params, with **graceful degradation** (Redis unreachable → fall back to a
+  direct query, never a hard dependency). Per-request latency on a cache hit drops
+  from ~hundreds of ms to ~1 ms. *(Any cost-% claim is a cache-hit-rate estimate —
+  labeled as such, no production traffic to measure real hit rate.)*
+
+## 12. 成本 / ROI
+
+* **Legacy warehouse cost optimization (~28%)**: cut Panoply spend from
+  $2,499 → $1,799/mo (~$8.4K/yr run-rate) by tuning ingestion frequency and pruning
+  unused tables on a volume-billed warehouse — owner-driven, fully substantiated.
+
+* **Migration off per-seat BI**: replaced Panoply + 16 Power BI Premium-Per-User
+  licenses (~$25K/yr legacy run-rate) with a self-built Databricks Lakehouse +
+  self-service portal, removing per-seat licensing as a cost-to-scale.
+
+* *(Integrity note: 16 users is the real, verifiable figure — do not inflate it.
+  New-stack net savings to be finalized over a representative production month;
+  Databricks is partly shared with a separate Costco workload, so allocate carefully.)*
 
 ---
 
@@ -220,17 +286,29 @@ scanned, reconciliation −1.51% with 100% itemized residual.
 - legacy_panoply_etl.md §0.2 的 13 个亮点(Multi-key resolution / Responsibility
   attribution model / REGEXP free-text extraction / PERCENTILE_CONT 等)还没并进来
 - page_view #14 anti-bulk-bias 过滤 / #15 customer cohort classification
-- Phase 4 + 6(部分)已并入 §9。Streaming(4.5)/ Redis(5)待后续
+- ✅ Phase 4 + 6 已并入 §9;Streaming(4.5)已并入 §10;平台化(Phase 5)已并入 §11;成本已并入 §12
 
 ---
 
 ## STAR 面试故事(已成型的)
 
-**Story: 对账证伪模型**
+**Story 1: 对账证伪模型**
 - S: 新平台 channel 销量比 legacy 系统性高 ~3%
 - T: 不能盲目对齐 legacy(它本身有 bug),要找到真实口径
 - A: 读 Panoply 源码定口径;发现自己最初的"整单排除 refund"模型让残差从 1.97%
   恶化到 6.57% → 推翻,重建为行级 netting;week-28 逐项拆解残差到每个因素
 - R: −1.51% 过 trust gate,残差 100% 归因,顺带量化出 legacy 的 3 个精度缺陷
+
+**Story 2: 无人值守容器连 Lakehouse (M2M)**
+- S: 部署到 Azure 后,后端容器要连 Databricks,但 PAT 被禁、U2M 的浏览器授权在无人值守容器里跑不了
+- T: 让 headless 容器安全地拿到 Databricks 访问权
+- A: 用 service principal 走 OAuth M2M(client credentials);踩到"account 级 secret 必须先把 SP assign 到 workspace 才认"这个坑;先 mock 验证整栈,再一个 env flip + KV secret 引用切真数据
+- R: 真数据在生产环境跑通,dashboard 显示真实数字;连接失败自动重置顺带刷新 token
+
+**Story 3: 遗留仓成本优化**
+- S: Panoply 涨价到 $2,499/mo,按数据量计费
+- T: 在不影响业务的前提下降本
+- A: 调整采集频率、按业务需求去重不必要的表采集 → 降低数据量
+- R: 月费 $2,499 → $1,799(~28%,~$8.4K/yr run-rate),持续到迁移下线
 
 (更多 STAR 见 legacy_panoply_etl.md §8.3)
