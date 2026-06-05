@@ -12,6 +12,7 @@
 //   NEXT_PUBLIC_API_BASE=http://localhost:8000
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 
 type ChangelogEntry = { version?: number; note?: string; breaking?: boolean };
 type Metric = {
@@ -56,6 +57,9 @@ export default function MetricsCatalog() {
 
   return (
     <div className="p-6 max-w-4xl mx-auto">
+      <div className="mb-4">
+          <Link href="/dashboards" className="text-sm text-blue-600 hover:underline">← Dashboards</Link>
+        </div>
       <div className="mb-4">
         <h1 className="text-xl font-semibold">Metrics Catalog</h1>
         <p className="text-sm text-gray-500">

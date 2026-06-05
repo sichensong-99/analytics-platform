@@ -19,6 +19,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as echarts from "echarts";
+import Link from "next/link";
 
 const REFRESH_MS = 5000;
 
@@ -111,6 +112,9 @@ export default function ChannelHealthDashboard() {
 
   return (
     <div className="p-6 max-w-5xl mx-auto">
+      <div className="mb-4">
+          <Link href="/dashboards" className="text-sm text-blue-600 hover:underline">← Dashboards</Link>
+        </div>
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-xl font-semibold">Real-time Channel Health</h1>
         <span className="text-sm text-gray-500">

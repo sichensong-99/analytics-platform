@@ -1,19 +1,12 @@
 "use client";
 
-// Phase 5 — Data Lineage graph
-// Renders the source -> silver -> warehouse -> metric -> dashboard DAG from
-// GET /lineage. Click a node to trace its full upstream + downstream (impact
-// analysis); click again (or "reset") to clear.
-//
-// Drop-in:
-//   - App Router:   save as app/lineage/page.tsx
-//   - Pages Router: save as components/LineageGraph.tsx and render it
-//   - needs Apache ECharts:  npm i echarts
-//
-// To embed in the Catalog page instead (click a metric -> show its lineage),
-// reuse this component and pre-select that metric's id.
+// Phase 5 — Data Lineage graph (BFF-proxied)
+// Fetches source -> silver -> warehouse -> metric -> dashboard DAG from the
+// same-origin proxy /api/lineage. Click a node to trace upstream + downstream
+// (impact analysis); click again (or "reset") to clear.
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import * as echarts from "echarts";
 
 type LNode = { id: string; name: string; category: number };
@@ -88,12 +81,13 @@ export default function LineageGraph() {
     return out;
   }, [data]);
 
-  // render
+  // render — init once, then setOption + resize on every data/selection change
   useEffect(() => {
     if (!elRef.current || !data) return;
     if (!chartRef.current) chartRef.current = echarts.init(elRef.current);
+    const chart = chartRef.current;
     const onNode = (id: string) => !connected || connected.has(id);
-    chartRef.current.setOption({
+    chart.setOption({
       tooltip: {},
       legend: [{ data: data.categories, top: 0 }],
       series: [
@@ -132,7 +126,19 @@ export default function LineageGraph() {
         },
       ],
     });
+    // Force a resize so the canvas isn't stuck at 0×0 on first paint
+    // (the usual cause of a blank ECharts graph in a standalone build).
+    chart.resize();
+    const raf = requestAnimationFrame(() => chart.resize());
+    return () => cancelAnimationFrame(raf);
   }, [data, positioned, connected]);
+
+  // keep the chart sized to its container
+  useEffect(() => {
+    const onResize = () => chartRef.current?.resize();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   // click a node -> select / deselect
   useEffect(() => {
@@ -157,11 +163,20 @@ export default function LineageGraph() {
 
   return (
     <div className="p-6 max-w-5xl mx-auto">
+      <div className="mb-4">
+        <Link href="/dashboards" className="text-sm text-blue-600 hover:underline">
+          ← Dashboards
+        </Link>
+      </div>
       <div className="flex items-center justify-between mb-2">
         <div>
           <h1 className="text-xl font-semibold">Data Lineage</h1>
           <p className="text-sm text-gray-500">
-            Click a node to trace its upstream &amp; downstream (impact analysis). Click again to reset.
+            {data
+              ? `${data.nodes.length} nodes · ${data.edges.length} edges · click a node to trace upstream & downstream`
+              : error
+              ? "could not load"
+              : "loading…"}
           </p>
         </div>
         {selected && (
