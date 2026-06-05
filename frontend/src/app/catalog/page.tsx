@@ -13,8 +13,6 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
-
 type ChangelogEntry = { version?: number; note?: string; breaking?: boolean };
 type Metric = {
   key: string;
@@ -35,7 +33,7 @@ export default function MetricsCatalog() {
   const [openKey, setOpenKey] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch(`${API_BASE}/catalog`)
+    fetch(`/api/catalog`)
       .then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json();

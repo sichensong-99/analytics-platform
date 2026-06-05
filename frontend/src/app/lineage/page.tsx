@@ -16,8 +16,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as echarts from "echarts";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
-
 type LNode = { id: string; name: string; category: number };
 type LEdge = { source: string; target: string };
 type Lineage = { categories: string[]; nodes: LNode[]; edges: LEdge[] };
@@ -30,7 +28,7 @@ export default function LineageGraph() {
   const chartRef = useRef<echarts.ECharts | null>(null);
 
   useEffect(() => {
-    fetch(`${API_BASE}/lineage`)
+    fetch(`/api/lineage`)
       .then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json();

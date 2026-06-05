@@ -36,6 +36,32 @@ const dashboards = [
   },
 ];
 
+const platform = [
+  {
+    href: '/catalog',
+    title: 'Metrics Catalog',
+    description:
+      'Every metric definition, version & changelog — the single source of truth',
+    category: 'Platform',
+    color: 'bg-slate-100 text-slate-700',
+  },
+  {
+    href: '/lineage',
+    title: 'Data Lineage',
+    description:
+      'Source → warehouse → metric → dashboard DAG · click any node for impact analysis',
+    category: 'Platform',
+    color: 'bg-slate-100 text-slate-700',
+  },
+  {
+    href: '/realtime',
+    title: 'Real-time Channel Health',
+    description: 'Live ROAS per channel with anomaly flags · streaming demo',
+    category: 'Platform',
+    color: 'bg-rose-50 text-rose-700',
+  },
+];
+
 export default async function DashboardsPage() {
   const cookieStore = await cookies();
   const token = cookieStore.get('auth-token')?.value;
@@ -86,6 +112,33 @@ export default async function DashboardsPage() {
                 {d.title}
               </h3>
               <p className="text-sm text-gray-500">{d.description}</p>
+            </Link>
+          ))}
+        </div>
+
+        <div className="mt-10 mb-6">
+          <h2 className="text-2xl font-bold text-gray-900">Platform</h2>
+          <p className="text-gray-500 mt-1">
+            Metric governance, lineage & real-time monitoring
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {platform.map((p) => (
+            <Link
+              key={p.href}
+              href={p.href}
+              className="bg-white p-6 rounded-lg border border-gray-200 hover:shadow-md hover:border-blue-300 transition"
+            >
+              <span
+                className={`inline-block text-xs font-medium px-2 py-1 rounded ${p.color} mb-3`}
+              >
+                {p.category}
+              </span>
+              <h3 className="text-lg font-semibold text-gray-900 mb-1">
+                {p.title}
+              </h3>
+              <p className="text-sm text-gray-500">{p.description}</p>
             </Link>
           ))}
         </div>

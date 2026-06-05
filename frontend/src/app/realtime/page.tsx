@@ -20,7 +20,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as echarts from "echarts";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
 const REFRESH_MS = 5000;
 
 type HealthWindow = {
@@ -47,7 +46,7 @@ export default function ChannelHealthDashboard() {
     let active = true;
     const load = async () => {
       try {
-        const res = await fetch(`${API_BASE}/metrics/channel-health?minutes=30`);
+        const res = await fetch(`/api/channel-health?minutes=30`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const json = await res.json();
         if (!active) return;
