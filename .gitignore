@@ -1,0 +1,25 @@
+﻿# === secrets / local env ===
+.env
+.env.*
+*.pem
+*.key
+.databrickscfg
+
+# === terraform (state/vars 含明文 secret) ===
+*.tfstate
+*.tfstate.*
+*.tfvars
+.terraform/
+
+# === build artifacts ===
+__pycache__/
+*.pyc
+node_modules/
+.next/
+
+# === 本地/私密文档:不进公开 repo ===
+NORTH_STAR.md
+SIA_PROFILE.md
+COST_ROI_REPORT.md
+PROJECT_AUDIT_AND_HANDOFF.md
+BLOG_OUTLINE.md
