@@ -82,3 +82,30 @@ resource "azurerm_role_assignment" "kv_admin" {
   role_definition_name = "Key Vault Secrets Officer"
   principal_id         = data.azurerm_client_config.current.object_id
 }
+# ---------- Storage Account (operational store for app users / RBAC) ----------
+# Backs admin-managed login + RBAC via a Table Storage `users` table.
+# Operational store, separate from the Databricks lakehouse (clean OLTP / OLAP split).
+resource "azurerm_storage_account" "auth" {
+  name                     = var.auth_storage_account_name
+  resource_group_name      = data.azurerm_resource_group.main.name
+  location                 = data.azurerm_resource_group.main.location
+  account_tier             = "Standard"
+  account_replication_type = "LRS"
+  min_tls_version          = "TLS1_2"
+
+  tags = var.tags
+}
+
+resource "azurerm_storage_table" "users" {
+  name                 = "users"
+  storage_account_name = azurerm_storage_account.auth.name
+}
+
+# Connection string into Key Vault (consistent with the Databricks creds).
+resource "azurerm_key_vault_secret" "tables_conn" {
+  name         = "tables-connection-string"
+  value        = azurerm_storage_account.auth.primary_connection_string
+  key_vault_id = azurerm_key_vault.kv.id
+
+  depends_on = [azurerm_role_assignment.kv_admin]
+}

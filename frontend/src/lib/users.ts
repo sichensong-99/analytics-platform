@@ -1,31 +1,93 @@
-// MVP 阶段:用户写死在代码里。
-// 生产环境会改成数据库 + SSO,这是最简单的能跑版本。
+// User store backed by Azure Table Storage.
+// Admin-managed: created/updated via /admin (next slice). Server-side only —
+// the connection string lives in route handlers, never reaches the browser.
 
 import bcrypt from 'bcryptjs';
+import { TableClient, odata } from '@azure/data-tables';
 
-// 密码统一是 "password123",bcrypt 加密后存这里
-// 实际部署时每个人改成自己的密码
-export const users = [
-  {
-    email: 'leader@company.com',
-    name: 'Team Leader',
-    passwordHash: bcrypt.hashSync('password123', 10),
-    role: 'admin',
-  },
-  {
-    email: 'member1@company.com',
-    name: 'Team Member 1',
-    passwordHash: bcrypt.hashSync('password123', 10),
-    role: 'viewer',
-  },
-  {
-    email: 'member2@company.com',
-    name: 'Team Member 2',
-    passwordHash: bcrypt.hashSync('password123', 10),
-    role: 'viewer',
-  },
-];
+const CONN = process.env.AZURE_TABLES_CONNECTION_STRING || '';
+const TABLE = 'users';
+const PARTITION = 'user';
 
-export function findUser(email: string) {
-  return users.find((u) => u.email === email);
+export interface AppUser {
+  email: string;
+  name: string;
+  role: string;
+  passwordHash: string;
+  createdAt: string;
+}
+
+function client(): TableClient {
+  if (!CONN) throw new Error('AZURE_TABLES_CONNECTION_STRING is not set');
+  return TableClient.fromConnectionString(CONN, TABLE);
+}
+
+function rowKey(email: string): string {
+  return email.trim().toLowerCase();
+}
+
+// Look up one user by email; null if not found.
+export async function findUser(email: string): Promise<AppUser | null> {
+  try {
+    const e = await client().getEntity(PARTITION, rowKey(email));
+    return {
+      email: (e.email as string) ?? rowKey(email),
+      name: (e.name as string) ?? '',
+      role: (e.role as string) ?? 'viewer',
+      passwordHash: (e.passwordHash as string) ?? '',
+      createdAt: (e.createdAt as string) ?? '',
+    };
+  } catch {
+    return null; // 404 from Table Storage -> not found
+  }
+}
+
+// List all users (admin view) — no password hashes.
+export async function listUsers(): Promise<Omit<AppUser, 'passwordHash'>[]> {
+  const out: Omit<AppUser, 'passwordHash'>[] = [];
+  const entities = client().listEntities({
+    queryOptions: { filter: odata`PartitionKey eq ${PARTITION}` },
+  });
+  for await (const e of entities) {
+    out.push({
+      email: (e.email as string) ?? (e.rowKey as string),
+      name: (e.name as string) ?? '',
+      role: (e.role as string) ?? 'viewer',
+      createdAt: (e.createdAt as string) ?? '',
+    });
+  }
+  out.sort((a, b) => a.email.localeCompare(b.email));
+  return out;
+}
+
+// Create a user; throws if the email already exists.
+export async function createUser(input: {
+  email: string;
+  name: string;
+  role: string;
+  password: string;
+}): Promise<void> {
+  await client().createEntity({
+    partitionKey: PARTITION,
+    rowKey: rowKey(input.email),
+    email: rowKey(input.email),
+    name: input.name,
+    role: input.role,
+    passwordHash: bcrypt.hashSync(input.password, 10),
+    createdAt: new Date().toISOString(),
+  });
+}
+
+export async function setUserRole(email: string, role: string): Promise<void> {
+  await client().updateEntity(
+    { partitionKey: PARTITION, rowKey: rowKey(email), role },
+    'Merge',
+  );
+}
+
+export async function setUserPassword(email: string, password: string): Promise<void> {
+  await client().updateEntity(
+    { partitionKey: PARTITION, rowKey: rowKey(email), passwordHash: bcrypt.hashSync(password, 10) },
+    'Merge',
+  );
 }

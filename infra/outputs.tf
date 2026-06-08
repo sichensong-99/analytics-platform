@@ -25,3 +25,11 @@ output "container_app_environment_id" {
 output "container_app_environment_name" {
   value = azurerm_container_app_environment.env.name
 }
+output "auth_storage_account_name" {
+  value = azurerm_storage_account.auth.name
+}
+
+output "auth_storage_connection_string" {
+  value     = azurerm_storage_account.auth.primary_connection_string
+  sensitive = true
+}

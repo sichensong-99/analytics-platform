@@ -42,3 +42,8 @@ variable "tags" {
     cost-center = "ecom-analytics"
   }
 }
+variable "auth_storage_account_name" {
+  description = "Storage account for the app users table (globally unique, 3-24 lowercase alphanumeric)"
+  type        = string
+  default     = "ap32dauthstore"
+}
