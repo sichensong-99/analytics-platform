@@ -31,6 +31,14 @@ const dashboards: Card[] = [
     category: 'Operations',
     color: 'bg-amber-50 text-amber-700',
   },
+  {
+    key: 'cohort',
+    href: '/dashboards/cohort',
+    title: 'Customer Cohort & Repurchase',
+    description: 'New vs returning by month + cohort retention matrix · window-function modeling',
+    category: 'Customer',
+    color: 'bg-indigo-50 text-indigo-700',
+  },
 ];
 
 const platform: Card[] = [

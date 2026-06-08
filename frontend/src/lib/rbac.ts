@@ -1,31 +1,19 @@
-// Role-based access control (pure — no server imports, client-safe).
-
-export const ROLES = [
-  'admin',
-  'merchandising',
-  'marketing',
-  'operations',
-  'geodis',
-  'viewer',
-] as const;
-
+// Role-based access control (pure — client-safe).
+export const ROLES = ['admin', 'viewer'] as const;
 export type Role = (typeof ROLES)[number];
 
 export type PageKey =
   | 'style-channel-quantity'
   | 'amazon-shipments'
+  | 'cohort'
   | 'catalog'
   | 'lineage'
   | 'admin';
 
-// Which pages each role may access. Adjust to your team's real needs.
+// admin = everything · viewer = business dashboards only (no governance / admin)
 const ACCESS: Record<string, PageKey[]> = {
-  admin: ['style-channel-quantity', 'amazon-shipments', 'catalog', 'lineage', 'admin'],
-  merchandising: ['style-channel-quantity', 'amazon-shipments'],
-  marketing: ['style-channel-quantity'],
-  operations: ['amazon-shipments', 'style-channel-quantity'],
-  geodis: ['amazon-shipments'],
-  viewer: ['style-channel-quantity', 'amazon-shipments'],
+  admin: ['style-channel-quantity', 'amazon-shipments', 'cohort', 'catalog', 'lineage', 'admin'],
+  viewer: ['style-channel-quantity', 'amazon-shipments', 'cohort'],
 };
 
 export function canAccess(role: string | undefined, page: PageKey): boolean {

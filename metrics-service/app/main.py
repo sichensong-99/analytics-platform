@@ -20,6 +20,7 @@ from app.routers.realtime import router as realtime_router
 from app.routers.catalog import router as catalog_router
 from app.routers.lineage import router as lineage_router
 from app.cache import cached_query, make_key
+from app.routers.cohort import router as cohort_router
 
 
 # ============ App init ============
@@ -33,6 +34,7 @@ app = FastAPI(
 app.include_router(realtime_router)
 app.include_router(catalog_router)
 app.include_router(lineage_router)
+app.include_router(cohort_router)
 
 app.add_middleware(
     CORSMiddleware,
