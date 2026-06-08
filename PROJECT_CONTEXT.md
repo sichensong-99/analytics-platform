@@ -475,6 +475,12 @@ traffic to measure real hit rate), not a measured fact. New-stack net savings ar
 deferred until a representative production month, and Databricks is partly shared with a
 separate Costco workload, so its cost is allocated carefully rather than fully charged to
 this project.
+
+### Decision 37 — Lineage 从手画升级为 Unity Catalog 系统表驱动(2026-06-05)
+- 决策:数据层血缘运行时从 system.access.table_lineage 自动派生(非手维护);指标/仪表盘层用 curated overlay 延伸;系统表不可读/无近期血缘时 fallback。
+- 理由(简历):手画血缘扛不过"怎么生成的?";系统表版 = 自动捕获 + 列级血缘可得 + 治理关键词。混合架构(数据层自动 + 应用层 curated + fallback)诚实可辩护。
+- 验证:/lineage 返回 source=unity_catalog_system_tables;column_lineage 已确认可得。
+- 局限:系统表覆盖近 ~90 天追踪查询;线上 SP 需 SELECT ON SCHEMA system.access 才实时,否则 fallback。
 ---
 
 ## 6. 项目仓库

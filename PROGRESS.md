@@ -5,6 +5,38 @@
 > 凡标 `⚠️【历史】` 的段落是过时/被推翻的旧版本,保留作演进记录,**判断现状以速览区为准**。
 
 ---
+## 2026-06-05 — Phase 5 lineage 升级 + Phase 4.5 流式验证
+
+### Phase 5 — Lineage 升级为 UC 系统表驱动 ✅(代码)
+- lineage.py 重写:数据层血缘从 system.access.table_lineage 实时派生(自动捕获，非手画);
+  指标→仪表盘层用 curated overlay 叠加(UC 不持有 app 对象);系统表读不到时 graceful fallback。
+- /lineage 本地验证通过,source = unity_catalog_system_tables。
+- 列级血缘(system.access.column_lineage)已验证可得 → 后续可做 per-table drill-down(暂不做)。
+- LineageGraph.tsx 前端不动(返回形状不变)。
+- 待办:线上 SP 不一定有 system.access 读权限 → 会 fallback;要线上也实时需请管理员授 SELECT ON SCHEMA system.access。
+
+### Phase 4.5 — 流式验证(Personal Compute)✅ 全部通过
+- 管线端到端打通(02→03→04)。
+- 去重 PROVEN:silver 零重复幸存((1)(2) 空)。
+- 乱序/迟到 PROVEN:silver 含迟到事件 lag 300+s、未丢、event_time 非单调((3))。
+- exactly-once PROVEN:停-重启 checksum 不变。
+- facebook 异常被 5min 窗口稀释(crash 45s)→ 名场面未触发;设计权衡,非 bug;改窗口/崩盘时长可复现。
+- 流已全部停止。
+
+### dpsync / metafield 完整性(关键发现)
+- order_metafield 真实覆盖仅自 ~2026-05 起;缺 2025-07-01 → 2026-04-30(~10 个月)。
+  月度查询为证(如 2025-11:38万订单仅 2 条 metafield)。
+- Cal backfill 邮件:[已发 / 待发 — 按实际填]。
+- ⚠️ 重新对账 BLOCKED on Cal backfill 落地。
+
+### 收尾/安全(按实际状态填)
+- NORTH_STAR.md / SIA_PROFILE.md 曾在公开 GitHub;网页手动删 ≠ 历史删 → filter-repo 擦除 [done/pending]。
+- .gitignore 需含:.venv/、NORTH_STAR.md、SIA_PROFILE.md、本地文档。
+- git push:[status]。
+- (a) Catalog/Lineage 接前端 + 重新部署:未做,下一场。后端路由已在 main.py 注册、cache 已接;
+  前端已有 /catalog /lineage /realtime 页面,需挂导航 + 指向部署后端 + redeploy;CORS 现仅 localhost(部署时改)。
+- SSO:IT 邮件已拟(Entra Easy Auth on analytics-frontend),待 IT。
+
 # ═══════ 当前状态速览（更新于 2026-06-04）═══════
 
 ## 🎉 里程碑：真数据上线（Phase 6.5 ✅）

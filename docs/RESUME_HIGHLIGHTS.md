@@ -249,6 +249,9 @@ scanned, reconciliation −1.51% with 100% itemized residual.
 * **Real-time dashboard**: Next.js + ECharts polling the serving API, with
   anomalous channels highlighted live.
 
+* **Unity Catalog 系统表驱动的自动数据血缘(table_lineage / column_lineage,含列级),取代手维护——体现数据治理。
+- 流式生产加固:dropDuplicatesWithinWatermark 去重 + 事件时间 watermark 处理乱序/迟到 + stop-restart exactly-once,均经验证。
+
 ## 11. 平台化 / 治理 (Phase 5)
 
 * **Metrics Catalog (semantic layer / self-service discovery)**: an endpoint + page

@@ -1,9 +1,8 @@
 "use client";
 
 // Phase 5 — Data Lineage graph (BFF-proxied)
-// Fetches source -> silver -> warehouse -> metric -> dashboard DAG from the
-// same-origin proxy /api/lineage. Click a node to trace upstream + downstream
-// (impact analysis); click again (or "reset") to clear.
+// source -> silver -> warehouse -> metric -> dashboard DAG from /api/lineage.
+// Click a node to trace upstream + downstream (impact analysis); click again to clear.
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
@@ -30,7 +29,6 @@ export default function LineageGraph() {
       .catch((e) => setError(e?.message ?? "fetch failed"));
   }, []);
 
-  // upstream / downstream adjacency
   const { up, down } = useMemo(() => {
     const up = new Map<string, string[]>();
     const down = new Map<string, string[]>();
@@ -43,7 +41,6 @@ export default function LineageGraph() {
     return { up, down };
   }, [data]);
 
-  // set of nodes connected to the selected one (both directions)
   const connected = useMemo(() => {
     if (!selected) return null;
     const seen = new Set<string>([selected]);
@@ -64,7 +61,7 @@ export default function LineageGraph() {
     return seen;
   }, [selected, up, down]);
 
-  // layered layout: x by category, y spread within category
+  // layered layout — wider spacing so the graph fills the canvas
   const positioned = useMemo(() => {
     if (!data) return [];
     const byCat = new Map<number, LNode[]>();
@@ -75,13 +72,13 @@ export default function LineageGraph() {
     const out: (LNode & { x: number; y: number })[] = [];
     byCat.forEach((nodes, cat) => {
       nodes.forEach((n, i) => {
-        out.push({ ...n, x: cat * 260, y: (i - (nodes.length - 1) / 2) * 66 });
+        out.push({ ...n, x: cat * 300, y: (i - (nodes.length - 1) / 2) * 84 });
       });
     });
     return out;
   }, [data]);
 
-  // render — init once, then setOption + resize on every data/selection change
+  // render — init once, then setOption + resize on every change
   useEffect(() => {
     if (!elRef.current || !data) return;
     if (!chartRef.current) chartRef.current = echarts.init(elRef.current);
@@ -95,9 +92,10 @@ export default function LineageGraph() {
           type: "graph",
           layout: "none",
           roam: true,
-          label: { show: true, fontSize: 11, position: "right" },
+          zoom: 1.15,
+          label: { show: true, fontSize: 12, position: "right" },
           edgeSymbol: ["none", "arrow"],
-          edgeSymbolSize: 7,
+          edgeSymbolSize: 8,
           emphasis: { focus: "adjacency" },
           categories: data.categories.map((c) => ({ name: c })),
           data: positioned.map((n) => ({
@@ -106,7 +104,7 @@ export default function LineageGraph() {
             x: n.x,
             y: n.y,
             category: n.category,
-            symbolSize: 14,
+            symbolSize: 18,
             itemStyle: { opacity: onNode(n.id) ? 1 : 0.15 },
             label: { opacity: onNode(n.id) ? 1 : 0.2 },
           })),
@@ -117,7 +115,7 @@ export default function LineageGraph() {
               target: e.target,
               lineStyle: {
                 opacity: on ? 0.6 : 0.08,
-                width: on ? 1.5 : 1,
+                width: on ? 1.6 : 1,
                 curveness: 0.1,
                 color: connected && on ? "#2563eb" : undefined,
               },
@@ -126,21 +124,17 @@ export default function LineageGraph() {
         },
       ],
     });
-    // Force a resize so the canvas isn't stuck at 0×0 on first paint
-    // (the usual cause of a blank ECharts graph in a standalone build).
     chart.resize();
     const raf = requestAnimationFrame(() => chart.resize());
     return () => cancelAnimationFrame(raf);
   }, [data, positioned, connected]);
 
-  // keep the chart sized to its container
   useEffect(() => {
     const onResize = () => chartRef.current?.resize();
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
-  // click a node -> select / deselect
   useEffect(() => {
     const c = chartRef.current;
     if (!c) return;
@@ -162,7 +156,7 @@ export default function LineageGraph() {
   );
 
   return (
-    <div className="p-6 max-w-5xl mx-auto">
+    <div className="p-6 max-w-6xl mx-auto">
       <div className="mb-4">
         <Link href="/dashboards" className="text-sm text-blue-600 hover:underline">
           ← Dashboards
@@ -190,7 +184,7 @@ export default function LineageGraph() {
       )}
       <div
         ref={elRef}
-        style={{ width: "100%", height: 520 }}
+        style={{ width: "100%", height: 680 }}
         className="rounded-lg border border-gray-200 bg-white"
       />
     </div>

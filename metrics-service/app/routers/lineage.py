@@ -1,97 +1,182 @@
 """
-Phase 5 — Data lineage endpoint
-GET /lineage  ->  { categories, nodes, edges } : source -> ... -> dashboard
+Phase 5 — Data lineage endpoint (Unity Catalog system-tables driven)
 
-Curated lineage config (declared here for clarity; in a fuller build you'd
-externalize it to lineage.yaml or parse it from the metric SQL). Adjust the
-node names / edges to match your exact tables.
+GET /lineage -> { source, categories, nodes, edges }
+               source -> silver -> warehouse -> metric -> dashboard
 
-Drop-in: save as app/routers/lineage.py, then in main.py:
-    from app.routers.lineage import router as lineage_router
-    app.include_router(lineage_router)
+Data-layer lineage (raw -> silver -> fact/dim/gold) is derived LIVE from
+Unity Catalog's system lineage table (system.access.table_lineage), which
+auto-captures lineage from actual query/pipeline execution — not hand-drawn.
+
+The metric -> dashboard layer is NOT a Unity Catalog concept (those are
+app-level objects), so it's overlaid from a small curated map to extend
+lineage end-to-end to the dashboards.
+
+Resilience: if the system table is unreadable (e.g. the deployed service
+principal lacks SELECT on system.access, or there's no recent lineage) the
+endpoint falls back to a curated static graph so the UI never breaks.
 """
 from fastapi import APIRouter
 
+from app.databricks_client import run_query
+
 router = APIRouter(tags=["lineage"])
+
+PROJECT_SCHEMA = "analytics_platform_32degrees"
+LINEAGE_LOOKBACK_DAYS = 90
 
 CATEGORIES = ["Source", "Raw / Silver", "Warehouse", "Metric", "Dashboard"]
 
-# (id, display name, category index)
-NODES = [
-    # Source
-    ("shopify", "Shopify", 0),
-    ("triple_whale", "Triple Whale", 0),
-    ("ers", "ERS CSV", 0),
-    ("amazon", "Amazon SP-API", 0),
-    ("rt_events", "Realtime events", 0),
-    ("date_seed", "Calendar seed", 0),
-    # Raw / Silver
-    ("slv_shopify", "shopify_32degrees.*", 1),
-    ("slv_tw", "attribution_order_click", 1),
-    ("slv_metafield", "order_metafield", 1),
-    ("rt_orders", "silver_realtime_orders", 1),
-    ("rt_ads", "silver_realtime_ads", 1),
-    ("rt_attr", "silver_realtime_attributed", 1),
-    ("amz_raw", "amazon raw", 1),
-    # Warehouse
-    ("fact", "fact_orders_line", 2),
-    ("dim_date", "dim_date", 2),
-    ("dim_channel", "dim_channel", 2),
-    ("dim_product", "dim_product", 2),
-    ("gold_rt", "gold_realtime_channel_health", 2),
-    ("amz_gold", "amazon gold", 2),
-    # Metric
+# ---- App-layer overlay (UC has no concept of metrics/dashboards) ----
+# warehouse table name -> [metric id, ...]
+TABLE_TO_METRICS = {
+    "fact_orders_line": ["m_revenue", "m_aov", "m_roas", "m_ad_spend"],
+    "gold_realtime_channel_health": ["m_channel_health"],
+}
+METRIC_NODES = [
     ("m_revenue", "revenue", 3),
     ("m_aov", "aov", 3),
     ("m_roas", "roas", 3),
     ("m_ad_spend", "ad_spend", 3),
     ("m_channel_health", "channel_health (RT)", 3),
-    # Dashboard
+]
+METRIC_TO_DASH = {
+    "m_revenue": ["dash_slice1"],
+    "m_aov": ["dash_slice1"],
+    "m_roas": ["dash_slice1"],
+    "m_ad_spend": ["dash_slice1"],
+    "m_channel_health": ["dash_rt"],
+}
+DASH_NODES = [
     ("dash_slice1", "Style x Channel x Week", 4),
     ("dash_rt", "Real-time Channel Health", 4),
 ]
 
-# (source, target)
-EDGES = [
-    ("shopify", "slv_shopify"),
-    ("shopify", "slv_metafield"),
-    ("triple_whale", "slv_tw"),
-    ("ers", "dim_product"),
-    ("amazon", "amz_raw"),
-    ("rt_events", "rt_orders"),
-    ("rt_events", "rt_ads"),
-    ("date_seed", "dim_date"),
+# tables we never want to show in the business lineage graph
+_INFRA_SUBSTRINGS = (
+    "event_log", "_permission_test", "pipeline_watermark",
+    "pipeline_run_history", "__unitystorage",
+)
 
-    ("slv_shopify", "fact"),
-    ("slv_tw", "fact"),
-    ("slv_metafield", "fact"),
-    ("slv_tw", "dim_channel"),
-    ("amz_raw", "amz_gold"),
 
-    ("dim_date", "fact"),
-    ("dim_channel", "fact"),
-    ("dim_product", "fact"),
+def _categorize(full_name: str) -> int:
+    name = full_name.rsplit(".", 1)[-1].lower()
+    if (name.startswith("fact_") or name.startswith("dim_")
+            or name.startswith("gold_") or "_gold_" in name or name.endswith("_gold")):
+        return 2  # Warehouse
+    if "silver" in name or "bronze" in name:
+        return 1  # Raw / Silver
+    return 0      # Source (raw shopify / triple_whale / dpsync / federated)
 
-    ("rt_orders", "rt_attr"),
-    ("rt_ads", "rt_attr"),
-    ("rt_attr", "gold_rt"),
 
-    ("fact", "m_revenue"),
-    ("fact", "m_aov"),
-    ("fact", "m_roas"),
-    ("fact", "m_ad_spend"),
-    ("gold_rt", "m_channel_health"),
+def _short(full_name: str) -> str:
+    parts = full_name.split(".")
+    if PROJECT_SCHEMA in full_name:
+        return parts[-1]                       # bare table for our schema
+    return ".".join(parts[-2:]) if len(parts) >= 2 else full_name  # schema.table for sources
 
-    ("m_revenue", "dash_slice1"),
-    ("m_aov", "dash_slice1"),
-    ("m_roas", "dash_slice1"),
-    ("m_ad_spend", "dash_slice1"),
-    ("m_channel_health", "dash_rt"),
-]
+
+def _is_infra(full_name: str) -> bool:
+    low = full_name.lower()
+    return any(s in low for s in _INFRA_SUBSTRINGS)
+
+
+def _load_system_lineage():
+    """Query UC system lineage; return (nodes, edges) for the data layer, or None."""
+    sql = f"""
+        SELECT DISTINCT source_table_full_name AS src,
+                        target_table_full_name AS tgt
+        FROM system.access.table_lineage
+        WHERE event_date >= current_date() - INTERVAL {LINEAGE_LOOKBACK_DAYS} DAYS
+          AND source_table_full_name IS NOT NULL
+          AND target_table_full_name IS NOT NULL
+          AND source_table_full_name <> target_table_full_name
+          AND (target_table_full_name LIKE '%{PROJECT_SCHEMA}%'
+               OR source_table_full_name LIKE '%{PROJECT_SCHEMA}%')
+    """
+    rows = run_query(sql, {})
+    if not rows:
+        return None
+
+    edges = []
+    node_ids = {}
+    for r in rows:
+        src, tgt = r["src"], r["tgt"]
+        if _is_infra(src) or _is_infra(tgt):
+            continue
+        for fn in (src, tgt):
+            if fn not in node_ids:
+                node_ids[fn] = {"id": fn, "name": _short(fn), "category": _categorize(fn)}
+        edges.append({"source": src, "target": tgt})
+
+    if not edges:
+        return None
+    return list(node_ids.values()), edges
+
+
+def _overlay_app_layer(nodes, edges):
+    """Append metric + dashboard nodes/edges on top of the data-layer graph."""
+    present = {n["id"] for n in nodes}
+
+    for full_name in list(present):
+        table = full_name.rsplit(".", 1)[-1]
+        for metric_id in TABLE_TO_METRICS.get(table, []):
+            edges.append({"source": full_name, "target": metric_id})
+
+    used_metrics = {e["target"] for e in edges if str(e["target"]).startswith("m_")}
+    for mid, name, cat in METRIC_NODES:
+        if mid in used_metrics:
+            nodes.append({"id": mid, "name": name, "category": cat})
+
+    used_dash = set()
+    for mid in list(used_metrics):
+        for dash_id in METRIC_TO_DASH.get(mid, []):
+            edges.append({"source": mid, "target": dash_id})
+            used_dash.add(dash_id)
+    for did, name, cat in DASH_NODES:
+        if did in used_dash:
+            nodes.append({"id": did, "name": name, "category": cat})
+
+    return nodes, edges
+
+
+def _fallback():
+    """Curated graph used only if system tables are unreadable/empty."""
+    nodes = [
+        {"id": "shopify", "name": "shopify_32degrees.*", "category": 0},
+        {"id": "tw", "name": "triple_whale.attribution_order_click", "category": 0},
+        {"id": "metafield", "name": "dpsync.order_metafield", "category": 0},
+        {"id": "ers", "name": "ERS CSV", "category": 0},
+        {"id": "fact_orders_line", "name": "fact_orders_line", "category": 2},
+        {"id": "dim_date", "name": "dim_date", "category": 2},
+        {"id": "dim_channel", "name": "dim_channel", "category": 2},
+        {"id": "dim_product", "name": "dim_product", "category": 2},
+    ]
+    edges = [
+        {"source": "shopify", "target": "fact_orders_line"},
+        {"source": "tw", "target": "fact_orders_line"},
+        {"source": "metafield", "target": "fact_orders_line"},
+        {"source": "ers", "target": "dim_product"},
+        {"source": "dim_date", "target": "fact_orders_line"},
+        {"source": "dim_channel", "target": "fact_orders_line"},
+        {"source": "dim_product", "target": "fact_orders_line"},
+    ]
+    return _overlay_app_layer(nodes, edges)
 
 
 @router.get("/lineage")
 def lineage():
-    nodes = [{"id": i, "name": n, "category": c} for (i, n, c) in NODES]
-    edges = [{"source": s, "target": t} for (s, t) in EDGES]
-    return {"categories": CATEGORIES, "nodes": nodes, "edges": edges}
+    source = "unity_catalog_system_tables"
+    try:
+        result = _load_system_lineage()
+    except Exception:
+        result = None
+
+    if result is None:
+        nodes, edges = _fallback()
+        source = "curated_fallback"
+    else:
+        nodes, edges = result
+        nodes, edges = _overlay_app_layer(nodes, edges)
+
+    return {"source": source, "categories": CATEGORIES, "nodes": nodes, "edges": edges}
