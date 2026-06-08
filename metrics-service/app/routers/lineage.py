@@ -1,182 +1,151 @@
 """
-Phase 5 — Data lineage endpoint (Unity Catalog system-tables driven)
+Phase 5 — Data lineage endpoint  (auto-derived + curated overlay)
+GET /lineage  ->  { categories, nodes, edges, source }
 
-GET /lineage -> { source, categories, nodes, edges }
-               source -> silver -> warehouse -> metric -> dashboard
+Data layer (table -> table) is read from a snapshot of Unity Catalog's
+system.access.table_lineage, materialized by the slice_1_daily workflow into
+  mvdevdatabricks.analytics_platform_32degrees.lineage_edges
+so the headless service principal can read it WITHOUT a system-table grant.
 
-Data-layer lineage (raw -> silver -> fact/dim/gold) is derived LIVE from
-Unity Catalog's system lineage table (system.access.table_lineage), which
-auto-captures lineage from actual query/pipeline execution — not hand-drawn.
+The metric -> dashboard layer is invisible to UC system tables (they only track
+tables/columns), so it's added here as a small curated overlay.
 
-The metric -> dashboard layer is NOT a Unity Catalog concept (those are
-app-level objects), so it's overlaid from a small curated map to extend
-lineage end-to-end to the dashboards.
-
-Resilience: if the system table is unreadable (e.g. the deployed service
-principal lacks SELECT on system.access, or there's no recent lineage) the
-endpoint falls back to a curated static graph so the UI never breaks.
+If the snapshot table is unreadable/empty (not built yet, or mock mode) we fall
+back to a fully-curated static graph.
 """
+import os
 from fastapi import APIRouter
-
-from app.databricks_client import run_query
 
 router = APIRouter(tags=["lineage"])
 
-PROJECT_SCHEMA = "analytics_platform_32degrees"
-LINEAGE_LOOKBACK_DAYS = 90
+CATALOG = "mvdevdatabricks"
+SCHEMA = "analytics_platform_32degrees"
+EDGES_TABLE = f"{CATALOG}.{SCHEMA}.lineage_edges"
+
+HOST = os.environ.get("DATABRICKS_HOST", "dbc-620cc0fc-b4ee.cloud.databricks.com")
+HTTP_PATH = os.environ.get("DATABRICKS_HTTP_PATH", "/sql/1.0/warehouses/39f94dd6ed9a78a4")
+DATA_SOURCE = os.environ.get("METRICS_DATA_SOURCE", "databricks")
 
 CATEGORIES = ["Source", "Raw / Silver", "Warehouse", "Metric", "Dashboard"]
 
-# ---- App-layer overlay (UC has no concept of metrics/dashboards) ----
-# warehouse table name -> [metric id, ...]
-TABLE_TO_METRICS = {
-    "fact_orders_line": ["m_revenue", "m_aov", "m_roas", "m_ad_spend"],
-    "gold_realtime_channel_health": ["m_channel_health"],
-}
-METRIC_NODES = [
-    ("m_revenue", "revenue", 3),
-    ("m_aov", "aov", 3),
-    ("m_roas", "roas", 3),
-    ("m_ad_spend", "ad_spend", 3),
-    ("m_channel_health", "channel_health (RT)", 3),
-]
-METRIC_TO_DASH = {
-    "m_revenue": ["dash_slice1"],
-    "m_aov": ["dash_slice1"],
-    "m_roas": ["dash_slice1"],
-    "m_ad_spend": ["dash_slice1"],
-    "m_channel_health": ["dash_rt"],
-}
-DASH_NODES = [
-    ("dash_slice1", "Style x Channel x Week", 4),
-    ("dash_rt", "Real-time Channel Health", 4),
+# curated overlay: (warehouse_table_short, metric_id, metric_label, dash_id, dash_label)
+OVERLAY = [
+    ("fact_orders_line", "m_quantity", "quantity_by_style_channel_week", "dash_slice1", "Style × Channel × Week"),
+    ("amazon_gold_receiving_by_sku", "m_amazon", "amazon_fba_receiving_by_sku", "dash_amazon", "Amazon FBA Receiving"),
 ]
 
-# tables we never want to show in the business lineage graph
-_INFRA_SUBSTRINGS = (
-    "event_log", "_permission_test", "pipeline_watermark",
-    "pipeline_run_history", "__unitystorage",
-)
 
+def _connect():
+    from databricks import sql
+    cid = os.environ.get("DATABRICKS_CLIENT_ID")
+    sec = os.environ.get("DATABRICKS_CLIENT_SECRET")
+    if cid and sec:                                   # M2M — headless container
+        from databricks.sdk.core import Config, oauth_service_principal
 
-def _categorize(full_name: str) -> int:
-    name = full_name.rsplit(".", 1)[-1].lower()
-    if (name.startswith("fact_") or name.startswith("dim_")
-            or name.startswith("gold_") or "_gold_" in name or name.endswith("_gold")):
-        return 2  # Warehouse
-    if "silver" in name or "bronze" in name:
-        return 1  # Raw / Silver
-    return 0      # Source (raw shopify / triple_whale / dpsync / federated)
+        def cred():
+            cfg = Config(host=f"https://{HOST}", client_id=cid, client_secret=sec)
+            return oauth_service_principal(cfg)
+
+        return sql.connect(server_hostname=HOST, http_path=HTTP_PATH, credentials_provider=cred)
+    return sql.connect(server_hostname=HOST, http_path=HTTP_PATH, auth_type="databricks-oauth")
 
 
 def _short(full_name: str) -> str:
+    """mvdevdatabricks.shopify_32degrees.order -> shopify_32degrees.order"""
     parts = full_name.split(".")
-    if PROJECT_SCHEMA in full_name:
-        return parts[-1]                       # bare table for our schema
-    return ".".join(parts[-2:]) if len(parts) >= 2 else full_name  # schema.table for sources
+    return ".".join(parts[1:]) if len(parts) >= 3 else full_name
 
 
-def _is_infra(full_name: str) -> bool:
-    low = full_name.lower()
-    return any(s in low for s in _INFRA_SUBSTRINGS)
+def _classify(full_name: str) -> int:
+    parts = full_name.split(".")
+    schema = parts[1] if len(parts) >= 3 else ""
+    table = parts[-1].lower()
+    if table.startswith(("fact_", "dim_", "gold_", "amazon_gold_")):
+        return 2                                      # Warehouse
+    if table.startswith(("silver_", "amazon_silver_", "amazon_bronze_")):
+        return 1                                      # Raw / Silver
+    if schema != SCHEMA:
+        return 0                                      # upstream Source
+    return 1
 
 
-def _load_system_lineage():
-    """Query UC system lineage; return (nodes, edges) for the data layer, or None."""
-    sql = f"""
-        SELECT DISTINCT source_table_full_name AS src,
-                        target_table_full_name AS tgt
-        FROM system.access.table_lineage
-        WHERE event_date >= current_date() - INTERVAL {LINEAGE_LOOKBACK_DAYS} DAYS
-          AND source_table_full_name IS NOT NULL
-          AND target_table_full_name IS NOT NULL
-          AND source_table_full_name <> target_table_full_name
-          AND (target_table_full_name LIKE '%{PROJECT_SCHEMA}%'
-               OR source_table_full_name LIKE '%{PROJECT_SCHEMA}%')
-    """
-    rows = run_query(sql, {})
-    if not rows:
-        return None
-
-    edges = []
-    node_ids = {}
-    for r in rows:
-        src, tgt = r["src"], r["tgt"]
-        if _is_infra(src) or _is_infra(tgt):
-            continue
-        for fn in (src, tgt):
-            if fn not in node_ids:
-                node_ids[fn] = {"id": fn, "name": _short(fn), "category": _categorize(fn)}
-        edges.append({"source": src, "target": tgt})
-
-    if not edges:
-        return None
-    return list(node_ids.values()), edges
+def _auto_edges() -> list[tuple[str, str]]:
+    if DATA_SOURCE == "mock":
+        return []
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f"SELECT source, target FROM {EDGES_TABLE}")
+            rows = [(r[0], r[1]) for r in cur.fetchall()]
+    finally:
+        conn.close()
+    return [(s, t) for (s, t) in rows if s and t and s != t]
 
 
-def _overlay_app_layer(nodes, edges):
-    """Append metric + dashboard nodes/edges on top of the data-layer graph."""
-    present = {n["id"] for n in nodes}
-
-    for full_name in list(present):
-        table = full_name.rsplit(".", 1)[-1]
-        for metric_id in TABLE_TO_METRICS.get(table, []):
-            edges.append({"source": full_name, "target": metric_id})
-
-    used_metrics = {e["target"] for e in edges if str(e["target"]).startswith("m_")}
-    for mid, name, cat in METRIC_NODES:
-        if mid in used_metrics:
-            nodes.append({"id": mid, "name": name, "category": cat})
-
-    used_dash = set()
-    for mid in list(used_metrics):
-        for dash_id in METRIC_TO_DASH.get(mid, []):
-            edges.append({"source": mid, "target": dash_id})
-            used_dash.add(dash_id)
-    for did, name, cat in DASH_NODES:
-        if did in used_dash:
-            nodes.append({"id": did, "name": name, "category": cat})
-
-    return nodes, edges
+# ---- fully-curated static fallback ----
+_FB_NODES = [
+    ("shopify", "Shopify", 0), ("triple_whale", "Triple Whale", 0), ("ers", "ERS CSV", 0),
+    ("amazon", "Amazon SP-API", 0),
+    ("slv_shopify", "shopify_32degrees.*", 1), ("slv_tw", "attribution_order_click", 1),
+    ("amz_silver", "amazon_silver_*", 1),
+    ("fact", "fact_orders_line", 2), ("dim_date", "dim_date", 2),
+    ("dim_channel", "dim_channel", 2), ("dim_product", "dim_product", 2),
+    ("amz_gold", "amazon_gold_receiving_by_sku", 2),
+    ("m_quantity", "quantity_by_style_channel_week", 3), ("m_amazon", "amazon_fba_receiving_by_sku", 3),
+    ("dash_slice1", "Style × Channel × Week", 4), ("dash_amazon", "Amazon FBA Receiving", 4),
+]
+_FB_EDGES = [
+    ("shopify", "slv_shopify"), ("triple_whale", "slv_tw"), ("ers", "dim_product"), ("amazon", "amz_silver"),
+    ("slv_shopify", "fact"), ("slv_tw", "fact"), ("slv_tw", "dim_channel"),
+    ("dim_date", "fact"), ("dim_channel", "fact"), ("dim_product", "fact"), ("amz_silver", "amz_gold"),
+    ("fact", "m_quantity"), ("amz_gold", "m_amazon"),
+    ("m_quantity", "dash_slice1"), ("m_amazon", "dash_amazon"),
+]
 
 
-def _fallback():
-    """Curated graph used only if system tables are unreadable/empty."""
-    nodes = [
-        {"id": "shopify", "name": "shopify_32degrees.*", "category": 0},
-        {"id": "tw", "name": "triple_whale.attribution_order_click", "category": 0},
-        {"id": "metafield", "name": "dpsync.order_metafield", "category": 0},
-        {"id": "ers", "name": "ERS CSV", "category": 0},
-        {"id": "fact_orders_line", "name": "fact_orders_line", "category": 2},
-        {"id": "dim_date", "name": "dim_date", "category": 2},
-        {"id": "dim_channel", "name": "dim_channel", "category": 2},
-        {"id": "dim_product", "name": "dim_product", "category": 2},
-    ]
-    edges = [
-        {"source": "shopify", "target": "fact_orders_line"},
-        {"source": "tw", "target": "fact_orders_line"},
-        {"source": "metafield", "target": "fact_orders_line"},
-        {"source": "ers", "target": "dim_product"},
-        {"source": "dim_date", "target": "fact_orders_line"},
-        {"source": "dim_channel", "target": "fact_orders_line"},
-        {"source": "dim_product", "target": "fact_orders_line"},
-    ]
-    return _overlay_app_layer(nodes, edges)
+def _curated():
+    return {
+        "categories": CATEGORIES,
+        "nodes": [{"id": i, "name": n, "category": c} for (i, n, c) in _FB_NODES],
+        "edges": [{"source": s, "target": t} for (s, t) in _FB_EDGES],
+        "source": "curated",
+    }
 
 
 @router.get("/lineage")
 def lineage():
-    source = "unity_catalog_system_tables"
     try:
-        result = _load_system_lineage()
+        auto = _auto_edges()
     except Exception:
-        result = None
+        auto = []
+    if not auto:
+        return _curated()                              # snapshot unavailable -> static
 
-    if result is None:
-        nodes, edges = _fallback()
-        source = "curated_fallback"
-    else:
-        nodes, edges = result
-        nodes, edges = _overlay_app_layer(nodes, edges)
+    nodes: dict[str, dict] = {}
 
-    return {"source": source, "categories": CATEGORIES, "nodes": nodes, "edges": edges}
+    def add(full_name: str) -> str:
+        nid = _short(full_name)
+        if nid not in nodes:
+            nodes[nid] = {"id": nid, "name": nid, "category": _classify(full_name)}
+        return nid
+
+    edges: list[dict] = []
+    for s, t in auto:
+        edges.append({"source": add(s), "target": add(t)})
+
+    # curated overlay: metric + dashboard layers
+    for tbl, mid, mlabel, did, dlabel in OVERLAY:
+        match = next((nid for nid in nodes if nid.split(".")[-1] == tbl), None)
+        if not match:
+            continue
+        nodes[mid] = {"id": mid, "name": mlabel, "category": 3}
+        nodes[did] = {"id": did, "name": dlabel, "category": 4}
+        edges.append({"source": match, "target": mid})
+        edges.append({"source": mid, "target": did})
+
+    return {
+        "categories": CATEGORIES,
+        "nodes": list(nodes.values()),
+        "edges": edges,
+        "source": "unity_catalog_system_tables + curated_overlay",
+    }

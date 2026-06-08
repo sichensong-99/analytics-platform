@@ -123,5 +123,18 @@
       "retry_on_timeout": false,
       "timeout_seconds": 600
     }
+    {
+      "task_key": "lineage_edges",
+      "run_if": "ALL_SUCCESS",
+      "existing_cluster_id": "0521-210526-y4gnz95c",
+      "notebook_task": {
+      "notebook_path": "/Workspace/Users/sia.song@32degrees.com/analytics-platform/slice_1/05_build_lineage_edges",
+       "source": "WORKSPACE"
+       },
+      "max_retries": 1,
+      "min_retry_interval_millis": 60000,
+      "retry_on_timeout": false,
+      "timeout_seconds": 600
+    }
   ]
 }
