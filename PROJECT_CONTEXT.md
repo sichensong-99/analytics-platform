@@ -497,6 +497,26 @@ this project.
 ### Decision 41 — metafield 不追,对账以 −1.51% 收口(2026-06-08)
 - 决策:order_metafield 经核查仅 1214 行(几乎未回填),is_replacement_order 按设计降级为 FALSE。不再去追 Cal 回填;Slice 1 对账以 −1.51%(<2% 信任门槛内)正式收口;metafield 列为后续可选精修。
 - 理由(简历):−1.51% 已达标,0.2% 的差别面试无人在乎;追 metafield = 又一个"被别人卡"的低 ROI 依赖。布尔标志位 + 优雅降级(数据没好不阻塞主流程、补齐后全量重跑收紧)本身就是更好的工程判断话术。
+
+### Decision 42 — 数据字典 = 扩展 YAML 指标定义,不另写静态文档(2026-06-09)
+- 决策:数据字典直接做成"扩展现有 YAML 指标定义"——在 definitions.yaml 每个指标补 governance 字段(source_system / grain / time_coverage / inclusions / exclusions / attribution / reconciliation)+ 文件末尾 filters 块,经 catalog.py 的 _normalize 透出,在 Catalog 页展示。全英文(team-facing)。同时把 4 个假指标(revenue_by_day / aov_by_day / roas_by_channel / ad_spend_by_day,指向不存在的 dws 表)标 status: deprecated 并在 /catalog 隐藏。
+- 理由(简历):"数据字典 / 指标口径治理 / data contract / 指标登记表"是国内 DE 和数据中台岗最认的关键词之一,本身就是独立简历素材;从 YAML 单一真相源自动生成 + 版本化,比静态文档强。顺带满足 leader #2。清理假指标 = 诚实的目录 + 一次治理动作。
+
+### Decision 43 — Style×Channel 筛选器改为动态客户端派生 + 搜索(2026-06-09)
+- 决策:弃用写死的 CHANNEL/SEASON/STYLE 常量数组;筛选选项从真实数据动态派生,加搜索框 + 清除 + 选中数显示;维度过滤从后端移到客户端(数据量小,按周/月足够)。修复了"筛选器只显约 10 个、图里更多"的 serving 层数据完整性 bug。
+- 理由(简历):这是个用户可见的数据完整性 bug(选项来自截断/写死数据而非全量 distinct),修它 = 一条"serving 层数据完整性修复"履历;客户端过滤让交互即时(UX),对当前数据量完全够。若将来需超大区间再加 /dimensions 端点 + 后端过滤。
+
+### Decision 44 — How-To Guide 作为应用内 /how-to 页交付,非独立文档(2026-06-09)
+- 决策:How-To 做成应用内 /how-to 页(随产品 ship + 版本化),Dashboards 首页加入口;内容含 portal 用途/受众、4 个核心 workflow 逐步点、链到 Catalog 当数据字典、known limitations(2026-05 覆盖 + 剔除 replacement/EXC/refund)、FAQ。
+- 理由(简历):它是"我交付的是有文档、可自助的数据产品(非裸管线)"的证据,是中级与中级偏高 DE 的分水岭叙事;内嵌入产品比外部文档更专业。顺带满足 leader #1。
+
+### Decision 45 — replacement 剔除经 FULL_REFRESH 重新生效并验证,对账锁 −1.51%(2026-06-09)
+- 决策:确认 replacement 剔除逻辑早已在管线内(notebook 04 §3b,replace_refund=='Replace' 按 order_id 关联,优雅降级)。增量水位线漏标了 67 单(metafield 后补打标、已出 2 天回看窗);跑 FULL_REFRESH 全量重评修复——检查1零泄漏、检查2 281/281 全标。对账维持 −1.51% 锁定(承接 Decision 41),不追 Cal 回填。metafield 自 ~2026-05 起持续覆盖,近期 replacement 正确剔除。
+- 理由(简历):"布尔标志位 + 优雅降级 + 周期性 FULL_REFRESH 兜底"是干净的工程叙事(逻辑确定正确 + 实践已验证 + 全量重跑兜底),比"等别人补数据"强;不给 leader/面试留"100% 绝对"这种经不起追问的话。
+
+### Decision 46 — Page View 延后;若做走 GA4 Data API 摄入(2026-06-09)
+- 决策:Page View 报表延后(遵 leader #6 depth-before-breadth)。盘点确认 GA4 在 Databricks 是"散装"的:联邦 ga4_session_reports(source/medium 粒度、无 page 维、无 channel group)+ 一周手工 landing-page 快照;无连续的 page 级漏斗源。若做,唯一有简历价值的路径 = 用 GA4 Data API 摄入,建受治理的 web-analytics silver 域 + 跨 GA4/TW 的 conformed channel 维(handle 来源已确认在 dpsync.shopify_32degrees.product/product_variant)。
+- 理由(简历):page_view 的聚合/渠道映射都与已有能力重复,唯一新增价值是"第三个源 + web-analytics 域 + conformed dimension + 跨平台摄入";直连联邦表 + 一周快照脆且零分,不做。
 ---
 
 ## 6. 项目仓库

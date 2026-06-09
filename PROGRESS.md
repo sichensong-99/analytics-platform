@@ -4,7 +4,34 @@
 > 顶部「当前状态速览」始终保持最新;往下是历史日志(含简历素材沉淀,全部保留)。
 > 凡标 `⚠️【历史】` 的段落是过时/被推翻的旧版本,保留作演进记录,**判断现状以速览区为准**。
 
+## 下一步（Phase 6 — 变现，非建设）
+1. Resume bullets（6-8 条量化）+ 项目讲述话术
+2. README 门面（架构图 + 血缘截图 + 亮点）
+3. git push（落后多日）+ git filter-repo 清历史（NORTH_STAR/SIA_PROFILE）
+4. 成本报告（Panoply ~28% / ~$8.4K/年）
+— 可选、已 defer: Page View(GA4 Data API 摄入)、revenue Slice 2、Cal 回填后重对账
 ---
+## 2026-06-09 — UX/文档/治理收尾 + Style 闭环
+
+**Style×Channel 彻底完成 ✅**
+- FULL_REFRESH 重建 fact_orders_line:replacement 剔除验证通过（检查1零泄漏；检查2: 281/281 全标）。
+- 对账锁定 −1.51% vs Panoply（week 28-2025，最后基线；Panoply 已退役）。
+- completion summary 里的 "pending metafield rerun" 尾巴关闭。
+
+**数据字典上线（= leader #2，也是简历素材）**
+- 在 definitions.yaml 给每个指标补 governance 字段（source/grain/time_coverage/inclusions/exclusions/attribution/reconciliation）+ 文件末尾 filters 块；全英文。
+- 4 个假指标（revenue_by_day / aov_by_day / roas_by_channel / ad_spend_by_day，指向不存在的 dws 表）已 deprecate，Catalog 只显真实指标。
+- catalog.py: _normalize 透出新字段 + 隐藏 deprecated + 返回 filters。
+
+**UX 自审（leader #3）**
+- Style×Channel 筛选器从写死数组 → 动态（从真实数据派生）+ 搜索 + 清除 + 选中数显示；修复"筛选器只显几个、图里更多"的数据完整性 bug。
+- Amazon 页加分页（CSV 仍导全量）。
+- 新增 /how-to 页（leader #1），Dashboards 首页加入口。
+
+**部署:** backend v13、frontend v13（ACR cloud build + containerapp update）。
+
+**状态:** portal = portfolio-complete。进入 Phase 6（简历/README/求职）。
+
 ## 2026-06-08 — Auth/RBAC + Cohort + Lineage自动派生 + 清理 全部上线
 
 ### Auth / RBAC（自研 JWT 扩展,未用 NextAuth/Entra）
