@@ -16,7 +16,7 @@ metrics:
   # ===========================================
   revenue_by_day:
     version: v1.0
-    status: active
+    status: deprecated
     owner: data-team
     created_at: "2026-04-28"
     updated_at: "2026-04-28"
@@ -55,7 +55,7 @@ metrics:
   # ===========================================
   aov_by_day:
     version: v1.0
-    status: active
+    status: deprecated
     owner: data-team
     created_at: "2026-04-28"
     updated_at: "2026-04-28"
@@ -94,7 +94,7 @@ metrics:
   # ===========================================
   roas_by_channel:
     version: v1.0
-    status: active
+    status: deprecated
     owner: marketing-team
     created_at: "2026-04-28"
     updated_at: "2026-04-28"
@@ -131,7 +131,7 @@ metrics:
   # ===========================================
   ad_spend_by_day:
     version: v1.0
-    status: active
+    status: deprecated
     owner: marketing-team
     created_at: "2026-04-28"
     updated_at: "2026-04-28"
@@ -196,7 +196,23 @@ metrics:
       week 28-2025: overall −1.51% (within < 2% trust gate),
       residual fully itemized.
     unit: count
-
+    source_system: "Triple Whale (channel attribution) + Shopify via Fivetran/dpsync (orders, line items, refunds, order metafield) + ERS product master (style attributes)"
+    grain: "order_line (one row per order line item); rolled up to style x channel x ISO week for display"
+    time_coverage:
+      history_starts: "2025-07-01"
+      channel_reliable_from: "2025-09-01"
+      replacement_exclusion_reliable_from: "2026-05-01"
+      notes: "Channel attribution reliable from Sep 2025. Replacement-order exclusion reliable from May 2026 (Shopify order metafield coverage start); earlier periods include replacement orders, immaterial (<0.1%)."
+    inclusions: "Paid orders flowing through Shopify, net of line-level refunds."
+    exclusions:
+      - "EXC orders (Shopify order name LIKE '%EXC%')"
+      - "Replacement orders (Shopify order metafield replace_refund = 'Replace'); reliable from May 2026"
+      - "Refunded units (netted at order_line grain: quantity - refunded_quantity)"
+    attribution:
+      source: "Triple Whale"
+      model: "Per-order attribution model as recorded by Triple Whale (linear / lastPlatformClick / fullFirstClick); channel_source_norm normalized to functional channel_group"
+      window: "Triple Whale default attribution window"
+    reconciliation: "vs Panoply Style_selling_df (final comparison, week 28-2025): -1.51%, within the <2% trust gate, residual fully itemized. Panoply retired June 2026; this is the last validated baseline."
     source_tables:
       - mvdevdatabricks.analytics_platform_32degrees.fact_orders_line
       - mvdevdatabricks.analytics_platform_32degrees.dim_date
@@ -308,6 +324,14 @@ metrics:
       receiving_gap = quantity_shipped - quantity_received.
       Snapshot metric — no date range (planning team views current state).
     unit: count
+    source_system: "Amazon Selling Partner API (SP-API) - FBA Inbound Shipments + Shipment Items"
+    grain: "shipment x SKU (one row per shipment_id x seller_sku)"
+    time_coverage:
+      notes: "FBA inbound shipments within the SP-API window; weekly snapshot scheduled Mon 06:00 ET."
+    inclusions: "All FBA inbound shipments returned by SP-API, across statuses."
+    exclusions: "None at the metric level; filter by shipment_status / destination_fc_id in the UI."
+    attribution: "N/A (operational receiving metric, no marketing attribution)."
+    reconciliation: "N/A (no legacy baseline; sourced directly from SP-API)."
 
     source_tables:
       - mvdevdatabricks.analytics_platform_32degrees.amazon_gold_receiving_by_sku
@@ -347,3 +371,68 @@ metrics:
         date: "2026-05-28"
         change: "Initial version. Migrated from PBI amazon_ship (Panoply)."
         breaking: false
+
+  cohort_new_vs_returning_by_month:
+    version: v1.0
+    status: active
+    owner: sia
+    name: "New vs Returning Customers by Month"
+    description: "Monthly split of orders / units between first-time and returning customers."
+    business_definition: |
+      A customer's first order is derived with ROW_NUMBER() partitioned by customer,
+      ordered by order date. order_index = 1 -> First-time; order_index > 1 -> Returning.
+    source_system: "Shopify via Fivetran/dpsync (orders, customers)"
+    grain: "customer x order; presented by calendar month"
+    unit: count
+    exclusions:
+      - "Same order-level exclusions as the sales model (EXC, replacement, refund netting)"
+    attribution: "N/A"
+    reconciliation: "N/A (not part of the Panoply migration scope)."
+
+  cohort_retention_matrix:
+    version: v1.0
+    status: active
+    owner: sia
+    name: "Cohort Retention Matrix"
+    description: "Repeat-purchase retention by first-purchase-month cohort across subsequent months."
+    business_definition: |
+      Customers are grouped by first-purchase month (cohort). Each cell is the share of the
+      cohort that placed an order in month N after acquisition.
+    source_system: "Shopify via Fivetran/dpsync (orders, customers)"
+    grain: "cohort (first-purchase month) x months since acquisition"
+    unit: percent
+    attribution: "N/A"
+    reconciliation: "N/A"
+
+filters:
+  channel_source:
+    label: "Channel"
+    definition: "Marketing channel the order is attributed to."
+    source_system: "Triple Whale"
+    applies_to: ["quantity_by_style_channel_week"]
+    notes: "Normalized to functional channel_group (Paid Search / Paid Social / Email / ...). Reliable from Sep 2025."
+  season:
+    label: "Season"
+    definition: "ERS product season tag."
+    source_system: "ERS product master"
+    applies_to: ["quantity_by_style_channel_week"]
+  style:
+    label: "Style #"
+    definition: "ERS vend_id (style identifier)."
+    source_system: "ERS product master"
+    applies_to: ["quantity_by_style_channel_week"]
+  shipment_status:
+    label: "Shipment Status"
+    definition: "Amazon FBA inbound shipment status (WORKING / SHIPPED / RECEIVING / CLOSED ...)."
+    source_system: "Amazon SP-API"
+    applies_to: ["amazon_fba_receiving_by_sku"]
+  destination_fc:
+    label: "Destination FC"
+    definition: "Destination Amazon fulfillment center for the shipment."
+    source_system: "Amazon SP-API"
+    applies_to: ["amazon_fba_receiving_by_sku"]
+  date_range:
+    label: "Date range"
+    definition: "Inclusive start/end date filter on the reporting window."
+    source_system: "derived (dim_date)"
+    applies_to: ["all"]

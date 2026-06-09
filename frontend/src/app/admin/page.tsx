@@ -16,7 +16,7 @@ export default async function AdminPage() {
         </Link>
       </nav>
       <main className="max-w-4xl mx-auto px-6 py-8">
-        <AdminPanel />
+        <AdminPanel currentEmail={admin.email} />
       </main>
     </div>
   );

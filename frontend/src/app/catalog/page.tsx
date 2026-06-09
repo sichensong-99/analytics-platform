@@ -25,10 +25,18 @@ type Metric = {
   unit?: string | null;
   owner?: string | null;
   changelog?: ChangelogEntry[];
+  source_system?: string | null;
+  business_definition?: string | null;
+  time_coverage?: Record<string, unknown> | null;
+  inclusions?: string | string[] | null;
+  exclusions?: string | string[] | null;
+  attribution?: Record<string, unknown> | string | null;
+  reconciliation?: string | null;
 };
 
 export default function MetricsCatalog() {
   const [metrics, setMetrics] = useState<Metric[]>([]);
+  const [filters, setFilters] = useState<Record<string, any>>({});
   const [q, setQ] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [openKey, setOpenKey] = useState<string | null>(null);
@@ -39,7 +47,10 @@ export default function MetricsCatalog() {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json();
       })
-      .then((j) => setMetrics(j.metrics ?? []))
+      .then((j) => {
+  setMetrics(j.metrics ?? []);
+  setFilters(j.filters ?? {});
+})
       .catch((e) => setError(e?.message ?? "fetch failed"));
   }, []);
 
@@ -118,6 +129,65 @@ export default function MetricsCatalog() {
                       </pre>
                     </div>
                   )}
+                  {(m.source_system ||
+  m.exclusions ||
+  m.attribution ||
+  m.reconciliation ||
+  (m.time_coverage &&
+    typeof m.time_coverage === "object" &&
+    "notes" in m.time_coverage &&
+    m.time_coverage.notes != null)) && (
+  <div className="space-y-2">
+    <div className="text-xs font-semibold text-gray-500">Governance</div>
+    <dl className="text-xs text-gray-700 space-y-1">
+      {m.source_system && (
+        <div>
+          <dt className="inline font-medium">Source: </dt>
+          <dd className="inline">{m.source_system}</dd>
+        </div>
+      )}
+
+      {m.exclusions && (
+        <div>
+          <dt className="inline font-medium">Exclusions: </dt>
+          <dd className="inline">
+            {Array.isArray(m.exclusions)
+              ? m.exclusions.join("; ")
+              : m.exclusions}
+          </dd>
+        </div>
+      )}
+
+      {m.attribution && (
+        <div>
+          <dt className="inline font-medium">Attribution: </dt>
+          <dd className="inline">
+            {typeof m.attribution === "string"
+              ? m.attribution
+              : JSON.stringify(m.attribution)}
+          </dd>
+        </div>
+      )}
+
+      {m.reconciliation && (
+        <div>
+          <dt className="inline font-medium">Reconciliation: </dt>
+          <dd className="inline">{m.reconciliation}</dd>
+        </div>
+      )}
+
+      {m.time_coverage &&
+        typeof m.time_coverage === "object" &&
+        "notes" in m.time_coverage &&
+        m.time_coverage.notes != null && (
+          <div>
+            <dt className="inline font-medium">Coverage: </dt>
+            <dd className="inline">{String(m.time_coverage.notes)}</dd>
+          </div>
+        )}
+    </dl>
+  </div>
+)}
                   <div className="flex gap-4 text-xs text-gray-600">
                     {m.unit && (
                       <span>
@@ -159,6 +229,40 @@ export default function MetricsCatalog() {
           <p className="text-gray-500 text-sm">No metrics match.</p>
         )}
       </div>
+
+       {Object.keys(filters).length > 0 && (
+        <div className="mt-6 rounded-lg border border-gray-200 bg-white p-4">
+          <div className="text-sm font-semibold text-gray-700 mb-3">Filters</div>
+
+          <div className="space-y-3">
+            {Object.entries(filters).map(([key, f]) => (
+              <div
+                key={key}
+                className="text-xs text-gray-700 border-t border-gray-100 pt-3 first:border-t-0 first:pt-0"
+              >
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="font-medium">{f.label ?? key}</span>
+                  <span className="font-mono text-gray-400">{key}</span>
+                </div>
+
+                {f.definition && (
+                  <p className="text-gray-600">
+                    <span className="font-medium">Definition: </span>
+                    {f.definition}
+                  </p>
+                )}
+
+                {f.source && (
+                  <p className="text-gray-600">
+                    <span className="font-medium">Source: </span>
+                    {f.source}
+                  </p>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

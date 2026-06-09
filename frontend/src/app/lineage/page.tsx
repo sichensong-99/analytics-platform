@@ -72,7 +72,7 @@ export default function LineageGraph() {
     const out: (LNode & { x: number; y: number })[] = [];
     byCat.forEach((nodes, cat) => {
       nodes.forEach((n, i) => {
-        out.push({ ...n, x: cat * 300, y: (i - (nodes.length - 1) / 2) * 84 });
+        out.push({ ...n, x: cat * 360, y: (i - (nodes.length - 1) / 2) * 80 });
       });
     });
     return out;
@@ -93,7 +93,16 @@ export default function LineageGraph() {
           layout: "none",
           roam: true,
           zoom: 1.15,
-          label: { show: true, fontSize: 12, position: "right" },
+          label: {
+            show: true,
+            fontSize: 11,
+            position: "right",
+            // 只显示表名末段；完整的 schema.table 太长会把图挤成一团
+            formatter: (p: any) => {
+              const parts = String(p.name).split(".");
+              return parts[parts.length - 1];
+            },
+          },
           edgeSymbol: ["none", "arrow"],
           edgeSymbolSize: 8,
           emphasis: { focus: "adjacency" },
@@ -146,7 +155,18 @@ export default function LineageGraph() {
       c.off("click", handler);
     };
   }, [data]);
-
+  
+  // 让画布始终匹配容器宽度：修"铺不满"，并在窗口缩放时重排
+  useEffect(() => {
+    const onResize = () => chartRef.current?.resize();
+    window.addEventListener("resize", onResize);
+    const t = setTimeout(onResize, 0); // 挂载后跑一次，对齐满屏容器
+    return () => {
+      window.removeEventListener("resize", onResize);
+      clearTimeout(t);
+    };
+  }, []);
+  
   useEffect(
     () => () => {
       chartRef.current?.dispose();
@@ -156,7 +176,7 @@ export default function LineageGraph() {
   );
 
   return (
-    <div className="p-6 max-w-6xl mx-auto">
+    <div className="p-6">
       <div className="mb-4">
         <Link href="/dashboards" className="text-sm text-blue-600 hover:underline">
           ← Dashboards

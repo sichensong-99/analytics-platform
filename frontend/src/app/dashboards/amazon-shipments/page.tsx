@@ -8,6 +8,8 @@ const STATUS_OPTIONS = [
   'DELIVERED', 'CHECKED_IN', 'CLOSED', 'CANCELLED', 'DELETED', 'ERROR',
 ];
 
+const PAGE_SIZE = 25; // 跟 Style 页一致
+
 interface Row {
   shipment_id: string;
   shipment_name: string;
@@ -42,6 +44,7 @@ export default function AmazonShipmentsPage() {
   const [resp, setResp] = useState<SnapshotResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [page, setPage] = useState(1); // 分页：当前页
 
   useEffect(() => {
     let cancelled = false;
@@ -71,6 +74,15 @@ export default function AmazonShipmentsPage() {
 
   const rows = resp?.data ?? [];
 
+  // 数据变了（换 filter / 重新加载）就回到第 1 页
+  useEffect(() => { setPage(1); }, [resp]);
+
+  const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+  const pageRows = useMemo(
+    () => rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
+    [rows, page],
+  );
+
   const kpi = useMemo(() => ({
     nShipments: new Set(rows.map((r) => r.shipment_id)).size,
     nSkus: new Set(rows.map((r) => r.seller_sku)).size,
@@ -78,7 +90,6 @@ export default function AmazonShipmentsPage() {
     totalGap: rows.reduce((s, r) => s + (r.receiving_gap ?? 0), 0),
   }), [rows]);
 
-  // FC options derived from data
   const fcOptions = useMemo(
     () => Array.from(new Set(rows.map((r) => r.destination_fc_id).filter(Boolean))).sort(),
     [rows],
@@ -92,7 +103,7 @@ export default function AmazonShipmentsPage() {
       'quantity_shipped', 'quantity_received', 'quantity_in_case', 'receiving_gap',
     ];
     const lines = [headers.join(',')];
-    for (const r of rows) {
+    for (const r of rows) { // 注意：导出用全量 rows，不是 pageRows
       lines.push([
         csvEscape(r.shipment_id), csvEscape(r.shipment_name),
         csvEscape(r.shipment_status), csvEscape(r.destination_fc_id),
@@ -219,43 +230,64 @@ export default function AmazonShipmentsPage() {
               {rows.length === 0 ? (
                 <p className="text-sm text-gray-500">No data for the selected filters.</p>
               ) : (
-                <table className="min-w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-gray-200 bg-gray-50">
-                      <th className="text-left px-2 py-2 font-medium">Shipment</th>
-                      <th className="text-left px-2 py-2 font-medium">Status</th>
-                      <th className="text-left px-2 py-2 font-medium">FC</th>
-                      <th className="text-left px-2 py-2 font-medium">Created</th>
-                      <th className="text-left px-2 py-2 font-medium">SKU</th>
-                      <th className="text-right px-2 py-2 font-medium">Shipped</th>
-                      <th className="text-right px-2 py-2 font-medium">Received</th>
-                      <th className="text-right px-2 py-2 font-medium bg-amber-50">Gap</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rows.map((r, idx) => (
-                      <tr key={`${r.shipment_id}-${r.seller_sku}-${idx}`}
-                          className="border-b border-gray-100 hover:bg-gray-50">
-                        <td className="px-2 py-1.5 font-mono text-xs">{r.shipment_id}</td>
-                        <td className="px-2 py-1.5 text-xs">{r.shipment_status}</td>
-                        <td className="px-2 py-1.5 text-xs">{r.destination_fc_id}</td>
-                        <td className="px-2 py-1.5 text-xs">{r.created_date ?? '—'}</td>
-                        <td className="px-2 py-1.5 font-mono text-xs">{r.seller_sku}</td>
-                        <td className="px-2 py-1.5 text-right tabular-nums">
-                          {(r.quantity_shipped ?? 0).toLocaleString()}
-                        </td>
-                        <td className="px-2 py-1.5 text-right tabular-nums">
-                          {(r.quantity_received ?? 0).toLocaleString()}
-                        </td>
-                        <td className={`px-2 py-1.5 text-right tabular-nums font-semibold bg-amber-50 ${
-                          r.receiving_gap > 0 ? 'text-amber-700' : 'text-gray-400'
-                        }`}>
-                          {(r.receiving_gap ?? 0).toLocaleString()}
-                        </td>
+                <>
+                  <table className="min-w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-gray-200 bg-gray-50">
+                        <th className="text-left px-2 py-2 font-medium">Shipment</th>
+                        <th className="text-left px-2 py-2 font-medium">Status</th>
+                        <th className="text-left px-2 py-2 font-medium">FC</th>
+                        <th className="text-left px-2 py-2 font-medium">Created</th>
+                        <th className="text-left px-2 py-2 font-medium">SKU</th>
+                        <th className="text-right px-2 py-2 font-medium">Shipped</th>
+                        <th className="text-right px-2 py-2 font-medium">Received</th>
+                        <th className="text-right px-2 py-2 font-medium bg-amber-50">Gap</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {pageRows.map((r, idx) => (
+                        <tr key={`${r.shipment_id}-${r.seller_sku}-${(page - 1) * PAGE_SIZE + idx}`}
+                            className="border-b border-gray-100 hover:bg-gray-50">
+                          <td className="px-2 py-1.5 font-mono text-xs">{r.shipment_id}</td>
+                          <td className="px-2 py-1.5 text-xs">{r.shipment_status}</td>
+                          <td className="px-2 py-1.5 text-xs">{r.destination_fc_id}</td>
+                          <td className="px-2 py-1.5 text-xs">{r.created_date ?? '—'}</td>
+                          <td className="px-2 py-1.5 font-mono text-xs">{r.seller_sku}</td>
+                          <td className="px-2 py-1.5 text-right tabular-nums">
+                            {(r.quantity_shipped ?? 0).toLocaleString()}
+                          </td>
+                          <td className="px-2 py-1.5 text-right tabular-nums">
+                            {(r.quantity_received ?? 0).toLocaleString()}
+                          </td>
+                          <td className={`px-2 py-1.5 text-right tabular-nums font-semibold bg-amber-50 ${
+                            r.receiving_gap > 0 ? 'text-amber-700' : 'text-gray-400'
+                          }`}>
+                            {(r.receiving_gap ?? 0).toLocaleString()}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+
+                  {rows.length > PAGE_SIZE && (
+                    <div className="flex items-center justify-between mt-3 text-sm">
+                      <span className="text-gray-500">
+                        Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, rows.length)} of {rows.length.toLocaleString()}
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1}
+                          className="px-3 py-1 border border-gray-200 rounded disabled:opacity-40 hover:bg-gray-50">
+                          Prev
+                        </button>
+                        <span className="text-gray-600">Page {page} / {totalPages}</span>
+                        <button onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={page >= totalPages}
+                          className="px-3 py-1 border border-gray-200 rounded disabled:opacity-40 hover:bg-gray-50">
+                          Next
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </>
               )}
             </div>
           </>

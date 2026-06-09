@@ -481,6 +481,22 @@ this project.
 - 理由(简历):手画血缘扛不过"怎么生成的?";系统表版 = 自动捕获 + 列级血缘可得 + 治理关键词。混合架构(数据层自动 + 应用层 curated + fallback)诚实可辩护。
 - 验证:/lineage 返回 source=unity_catalog_system_tables;column_lineage 已确认可得。
 - 局限:系统表覆盖近 ~90 天追踪查询;线上 SP 需 SELECT ON SCHEMA system.access 才实时,否则 fallback。
+
+### Decision 38 — 用户存储用 Azure Table Storage(2026-06-08)
+- 决策:admin 管理的登录/RBAC 用户存 Azure Table Storage(terraform 建 storage account + users 表 + 连接串进 KV);不用 NextAuth、不用 Entra SSO、不上 Postgres。沿用已有的自研 JWT + bcrypt。
+- 理由(简历):自研 RBAC + bcrypt + JWT + admin 控制台是亲手做的 authn/authz,国内必问、共鸣强;Entra 卡 IT 且只是配置、深度浅;15 个用户上 Postgres 是 over-engineering。Table Storage 持久、免挂卷、原生 Azure。省下时间投 cohort。
+
+### Decision 39 — RBAC 收为 admin / viewer 两档(2026-06-08)
+- 决策:角色从 5 个(merchandising/marketing/operations/geodis/…)收成两档——admin(我,全权限,含 Catalog/Lineage/admin)、viewer(其他人,业务看板:Style×Channel/Amazon/Cohort)。在 BFF 代理 server-side 强校验,非只藏 UI。
+- 理由(简历):仍是正经 RBAC(角色→页面映射 + server-side gate),关键词照拿;预设的多角色我用不上,留着是摆设、反显过度设计。两档诚实、可随时再扩。
+
+### Decision 40 — Lineage 走"系统表快照→lineage_edges"绕开 SP 授权(2026-06-08)
+- 决策:不让线上后端(SP)实时查 system.access;改由我自己身份跑 notebook 05_build_lineage_edges 把血缘快照进 analytics_platform_32degrees.lineage_edges(我 owner,自授 SP 读);后端只读这张表 + curated 叠加指标/看板层 + 优雅降级。接进 slice_1_daily。
+- 理由(简历):SP 授 system schema 要 metastore admin(我没权,会被卡);快照模式零授权依赖、页面更快、还多一个"系统表快照进受治理表"的治理叙事,比直连更值钱。
+
+### Decision 41 — metafield 不追,对账以 −1.51% 收口(2026-06-08)
+- 决策:order_metafield 经核查仅 1214 行(几乎未回填),is_replacement_order 按设计降级为 FALSE。不再去追 Cal 回填;Slice 1 对账以 −1.51%(<2% 信任门槛内)正式收口;metafield 列为后续可选精修。
+- 理由(简历):−1.51% 已达标,0.2% 的差别面试无人在乎;追 metafield = 又一个"被别人卡"的低 ROI 依赖。布尔标志位 + 优雅降级(数据没好不阻塞主流程、补齐后全量重跑收紧)本身就是更好的工程判断话术。
 ---
 
 ## 6. 项目仓库

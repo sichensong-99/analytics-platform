@@ -5,7 +5,7 @@ import { ROLES } from '@/lib/rbac';
 
 type User = { email: string; name: string; role: string; createdAt: string };
 
-export default function AdminPanel() {
+export default function AdminPanel({ currentEmail }: { currentEmail: string }) {
   const [users, setUsers] = useState<User[]>([]);
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -93,6 +93,20 @@ export default function AdminPanel() {
     flash(`Password reset for ${userEmail}. Share it via Slack/WeChat.`);
   }
 
+  async function removeUser(userEmail: string) {
+    if (!confirm(`Delete ${userEmail}? This cannot be undone.`)) return;
+    const r = await fetch(`/api/admin/users/${encodeURIComponent(userEmail)}`, {
+      method: 'DELETE',
+    });
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      setErr(j.error ?? `delete failed (HTTP ${r.status})`);
+      return;
+    }
+    flash(`Deleted ${userEmail}.`);
+    load();
+  }
+
   return (
     <div className="space-y-8">
       {msg && <div className="rounded bg-green-50 text-green-700 text-sm px-4 py-2">{msg}</div>}
@@ -142,6 +156,12 @@ export default function AdminPanel() {
                     className="text-sm text-blue-600 hover:underline">
                     reset password
                   </button>
+                  {u.email.toLowerCase() !== currentEmail.toLowerCase() && (
+                    <button onClick={() => removeUser(u.email)}
+                      className="text-sm text-red-600 hover:underline">
+                      delete
+                    </button>
+                  )}
                 </div>
               </div>
             ))}

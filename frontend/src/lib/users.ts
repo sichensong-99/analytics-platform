@@ -91,3 +91,6 @@ export async function setUserPassword(email: string, password: string): Promise<
     'Merge',
   );
 }
+export async function deleteUser(email: string): Promise<void> {
+  await client().deleteEntity(PARTITION, rowKey(email));
+}

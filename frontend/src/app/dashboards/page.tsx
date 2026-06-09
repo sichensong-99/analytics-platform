@@ -113,15 +113,32 @@ export default async function DashboardsPage() {
 
       <main className="max-w-7xl mx-auto px-6 py-8">
         <div className="mb-6">
-          <h2 className="text-2xl font-bold text-gray-900">Dashboards</h2>
-          <p className="text-gray-500 mt-1">Analytics available to your role</p>
-        </div>
+  <h2 className="text-2xl font-bold text-gray-900">Dashboards</h2>
+  <p className="text-gray-500 mt-1">Analytics available to your role</p>
+</div>
 
-        {visibleDashboards.length > 0 ? (
-          <CardGrid cards={visibleDashboards} />
-        ) : (
-          <p className="text-gray-500">No dashboards assigned to your role yet.</p>
-        )}
+<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
+  <Link
+    href="/how-to"
+    className="bg-white p-6 rounded-lg border border-gray-200 hover:shadow-md hover:border-blue-300 transition"
+  >
+    <span className="inline-block text-xs font-medium px-2 py-1 rounded bg-blue-50 text-blue-700 mb-3">
+      Guide
+    </span>
+    <h3 className="text-lg font-semibold text-gray-900 mb-1">
+      How to use this portal
+    </h3>
+    <p className="text-sm text-gray-500">
+      New here? Start guide, workflows, data dictionary, and known limitations.
+    </p>
+  </Link>
+</div>
+
+{visibleDashboards.length > 0 ? (
+  <CardGrid cards={visibleDashboards} />
+) : (
+  <p className="text-gray-500">No dashboards assigned to your role yet.</p>
+)}
 
         {visiblePlatform.length > 0 && (
           <>

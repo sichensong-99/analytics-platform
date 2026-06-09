@@ -48,6 +48,14 @@ def _normalize(key, body):
         "unit": _first(body, "unit", "format"),
         "owner": _first(body, "owner", "team"),
         "changelog": _first(body, "changelog", "changes", "history", default=[]),
+        "status": _first(body, "status", default="active"),
+        "source_system": _first(body, "source_system", "source"),
+        "business_definition": _first(body, "business_definition", "logic"),
+        "time_coverage": _first(body, "time_coverage"),
+        "inclusions": _first(body, "inclusions"),
+        "exclusions": _first(body, "exclusions"),
+        "attribution": _first(body, "attribution"),
+        "reconciliation": _first(body, "reconciliation"),
         "raw": body,
     }
 
@@ -69,6 +77,13 @@ def _load_metrics():
             out.append(_normalize(k, item))
     return out
 
+def _load_filters():
+    import yaml
+    path = next((p for p in _CANDIDATES if p and Path(p).exists()), None)
+    if not path:
+        return {}
+    doc = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+    return doc.get("filters", {})
 
 def _mock():
     return [
@@ -89,11 +104,22 @@ def _mock():
          "owner": "growth", "changelog": [], "raw": {}},
     ]
 
-
 @router.get("/catalog")
 def catalog():
     metrics = _load_metrics()
     source = "definitions.yaml"
+
     if metrics is None:
         metrics, source = _mock(), "mock"
-    return {"source": source, "count": len(metrics), "metrics": metrics}
+
+    metrics = [
+        m for m in metrics
+        if (m.get("status") or "active") == "active"
+    ]
+
+    return {
+        "source": source,
+        "count": len(metrics),
+        "metrics": metrics,
+        "filters": _load_filters(),
+    }

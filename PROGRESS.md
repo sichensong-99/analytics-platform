@@ -5,6 +5,39 @@
 > 凡标 `⚠️【历史】` 的段落是过时/被推翻的旧版本,保留作演进记录,**判断现状以速览区为准**。
 
 ---
+## 2026-06-08 — Auth/RBAC + Cohort + Lineage自动派生 + 清理 全部上线
+
+### Auth / RBAC（自研 JWT 扩展,未用 NextAuth/Entra）
+- 用户存储迁到 Azure Table Storage（terraform 建 storage account + users 表 + 连接串进 KV）；登录读 Table Storage；seed 脚本建首个 admin。
+- /admin 控制台：建号 / 改角色 / 重置密码 / 删除用户（删自己被挡）。
+- RBAC 两档：admin=全部（含 Catalog/Lineage/admin）；viewer=业务看板（Style×Channel/Amazon/Cohort）。Catalog/Lineage 的 BFF 代理 server-side 强校验 admin。
+
+### Cohort 复购分析（新增窗口函数能力）
+- notebook 06_build_cohort：ROW_NUMBER 派首购/复购 + 首单月 cohort 留存矩阵 → 两张 Delta 表；接进 slice_1_daily（并行 task）。
+- 后端 /cohort + /api/cohort + /dashboards/cohort（new/returning 堆叠柱 + 留存热力矩阵，CSV 导全集）。
+- 数据：customer_id 覆盖 99.86%、428万客户、2016–2026。
+
+### Lineage 自动派生（快照版,绕开系统表授权）
+- notebook 05_build_lineage_edges：快照 system.access.table_lineage → lineage_edges 表（自己 owner,自授 SP 读）；接进 slice_1_daily。
+- lineage.py 重写：数据层从 lineage_edges 自动派生 + 指标/看板 curated 叠加 + 优雅降级；前端节点标签只显短表名（长全名会把图挤成一团,已修）。
+
+### 数据核查（2026-06-08）
+- TW attribution 完整：27.2M 行、2025-07 起各月命中率 99.8–100%。
+- metafield 未回填：order_metafield 仅 1214 行 → is_replacement_order 按设计降级为 FALSE（true 仅 554 行）。决定：不追,对账以 −1.51% 收口（<2% 门槛内）；metafield 视为后续精修。
+
+### 清理 / 上线
+- 撤 3 张死卡（Shopify Sales/Ad Attribution：dws.* 占位表不存在；Realtime：流停为空）—— 代码留存,不挂导航。
+- style-channel 矩阵表分页（25/页,CSV 仍导全集）。
+
+### 镜像（重要,新 chat 要知道当前版本）
+- metrics-service: v5
+- analytics-frontend: v10（含分页 + lineage短标签 + admin删除）
+
+### 仍待办 / 下一步
+- [ ] 简历收尾：README（含血缘图）、Phase 6 bullet 定稿、可选技术博客（−1.51% 对账 或 lineage 快照绕授权）
+- [ ] （可选）metafield 回填后 FULL_REFRESH + 重对账，看是否收紧到 ~−1.7%
+- [ ] （可选）TW 现已 100%,可 FULL_REFRESH 取当前最准对账数
+
 ## 2026-06-05 — Phase 5 lineage 升级 + Phase 4.5 流式验证
 
 ### Phase 5 — Lineage 升级为 UC 系统表驱动 ✅(代码)
