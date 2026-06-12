@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: metrics-service   # ← 改:所有 run 步骤进子目录
+    env:
+      METRICS_DATA_SOURCE: mock
+      JWT_SECRET: ci-test-secret-not-real
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Lint (ruff)
+        run: uv run ruff check app                # ← 改:metrics-service → app
+        continue-on-error: true
+
+      - name: Test (pytest + coverage)
+        run: uv run pytest --cov=app --cov-report=term-missing
