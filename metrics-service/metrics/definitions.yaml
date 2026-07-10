@@ -1,0 +1,641 @@
+# ====================================================
+# Metric Definitions
+# ====================================================
+# Each metric includes:
+# - version: semantic version (v1.0, v1.1, ...)
+# - status: active / deprecated / experimental
+# - owner: who owns this metric definition
+# - source_tables: upstream tables (used for lineage)
+# - changelog: history of definition changes
+# ====================================================
+
+metrics:
+  page_view_by_product:
+    version: v1.0
+    status: active
+    owner: sia
+    created_at: "2026-06-16"
+    updated_at: "2026-06-16"
+
+    name: "Page View by Product"
+    description: "Per-product engagement + sales over a date range, replacing the legacy Panoply Page_view PBI report. Aggregated to product level (no date column) for the download."
+    business_definition: |
+      One row per product page (/products/{handle}), aggregated over the selected
+      date range. Sales columns (unique_orders / unique_sold / net_sales) come from
+      Shopify via dpsync at the order_line grain: ET day, net = price*qty - discount,
+      anti-bulk filter (order qty <= 30), full-row refund anti-join (nets ALL refunds —
+      more conservative than the legacy ~45% tag/metafield-based detection, which is
+      why per-product net runs ~1-3% below the legacy report). Engagement columns
+      (event_count / add_to_cart / 15 channel sessions) come from the GA4 Data API
+      joined on /products/{handle}; GA4 figures run ~5-8% below legacy due to GA4 Data
+      API (other)-bucketing + GA4-vs-ET timezone edge, and are directional. Attributes
+      (category / gender / descr) come from dim_product (ERS) and match exactly.
+    unit: mixed
+    source_system: "Shopify via dpsync (orders/lines/refunds) + GA4 Data API (sessions/page engagement) + ERS product master (attributes)"
+    grain: "product page (one row per /products/{handle}); aggregated over the selected date range"
+    time_coverage:
+      history_starts: "2016-12-18 (Shopify); GA4 columns reliable from 2025-07-01"
+      notes: "Shopify columns cover full order history; GA4 columns populate only where ga4_silver has data (backfill from 2025-07-01). Dashboard default range should start 2025-07-01 where both sides are complete."
+    inclusions: "Paid order lines net of all refunds; GA4 sessions/page events attributed to the product page."
+    exclusions:
+      - "Bulk orders (total order quantity > 30)"
+      - "Refunded units (full-row (order, sku) anti-join)"
+      - "Zero-net lines"
+    reconciliation: "Shopify side validated vs legacy PBI weeks 2025-07-01..09 and 2025-08-01..07: week-total orders/units/net within -0.6% to -2.8%, fully attributed to refund treatment. GA4 side directional (-5-8%)."
+
+    source_tables:
+      - analytics_catalog.analytics_platform.page_view_gold
+    upstream_metrics: []
+
+    lineage_upstream:
+      facts:
+        - page_view_gold
+      dims:
+        - dim_product
+      raw_sources:
+        - shopify_raw.order
+        - shopify_raw.order_line
+        - shopify_raw.order_line_refund
+        - shopify_raw.product
+        - analytics_platform.ga4_silver_page
+        - analytics_platform.ga4_silver_traffic
+
+    sql: |
+      SELECT
+        page,
+        SUM(event_count)         AS event_count,
+        SUM(add_to_cart)         AS add_to_cart,
+        SUM(unique_orders)       AS unique_orders,
+        SUM(unique_sold)         AS unique_sold,
+        ROUND(SUM(net_sales), 2) AS net_sales,
+        MAX(category)            AS category,
+        MAX(gender)              AS gender,
+        MAX(descr)               AS descr,
+        SUM(email)               AS email,
+        SUM(paid_search)         AS paid_search,
+        SUM(paid_social)         AS paid_social,
+        SUM(affiliates)          AS affiliates,
+        SUM(organic_social)      AS organic_social,
+        SUM(direct)              AS direct,
+        SUM(organic_search)      AS organic_search,
+        SUM(sms)                 AS sms,
+        SUM(cross_network)       AS cross_network,
+        SUM(referral)            AS referral,
+        SUM(paid_shopping)       AS paid_shopping,
+        SUM(organic_shopping)    AS organic_shopping,
+        SUM(organic_video)       AS organic_video,
+        SUM(paid_other)          AS paid_other,
+        SUM(unassigned)          AS unassigned
+      FROM analytics_catalog.analytics_platform.page_view_gold
+      WHERE date BETWEEN to_date(CAST(:start_date AS STRING), 'yyyyMMdd')
+                     AND to_date(CAST(:end_date   AS STRING), 'yyyyMMdd')
+      GROUP BY page
+      ORDER BY unique_orders DESC
+
+    params:
+      - start_date
+      - end_date
+
+    changelog:
+      - version: v1.0
+        date: "2026-06-16"
+        change: "Initial. Product-level Page_view replacement; date range + optional category filter; PBI download format (no date column)."
+        breaking: false
+  # ===========================================
+  # Revenue Metrics
+  # ===========================================
+  revenue_by_day:
+    version: v1.0
+    status: deprecated
+    owner: data-team
+    created_at: "2026-04-28"
+    updated_at: "2026-04-28"
+
+    name: "Daily Revenue"
+    description: "Total revenue from completed orders, by day."
+    business_definition: |
+      Counted only when financial_status = 'paid'.
+      Refunded and pending orders are excluded.
+      Currency: USD. Timezone: UTC.
+    unit: USD
+
+    source_tables:
+      - dws.daily_revenue
+    upstream_metrics: []
+
+    sql: |
+      SELECT
+        order_date AS date,
+        SUM(revenue) AS value
+      FROM dws.daily_revenue
+      WHERE order_date BETWEEN :start_date AND :end_date
+      GROUP BY order_date
+      ORDER BY order_date
+
+    params:
+      - start_date
+      - end_date
+
+    changelog:
+      - version: v1.0
+        date: "2026-04-28"
+        change: "Initial version"
+        breaking: false
+
+  # ===========================================
+  aov_by_day:
+    version: v1.0
+    status: deprecated
+    owner: data-team
+    created_at: "2026-04-28"
+    updated_at: "2026-04-28"
+
+    name: "Average Order Value"
+    description: "Average revenue per completed order, by day."
+    business_definition: |
+      AOV = total revenue / order count, only paid orders.
+    unit: USD
+
+    source_tables:
+      - dws.daily_revenue
+    upstream_metrics: []
+
+    sql: |
+      SELECT
+        order_date AS date,
+        SUM(revenue) / NULLIF(SUM(order_count), 0) AS value
+      FROM dws.daily_revenue
+      WHERE order_date BETWEEN :start_date AND :end_date
+      GROUP BY order_date
+      ORDER BY order_date
+
+    params:
+      - start_date
+      - end_date
+
+    changelog:
+      - version: v1.0
+        date: "2026-04-28"
+        change: "Initial version"
+        breaking: false
+
+  # ===========================================
+  # Marketing Metrics
+  # ===========================================
+  roas_by_channel:
+    version: v1.0
+    status: deprecated
+    owner: marketing-team
+    created_at: "2026-04-28"
+    updated_at: "2026-04-28"
+
+    name: "ROAS by Channel"
+    description: "Return on ad spend, broken down by acquisition channel."
+    business_definition: |
+      ROAS = attributed_revenue / ad_spend.
+      Uses last-click attribution model from Triple Whale.
+    unit: ratio
+
+    source_tables:
+      - dws.channel_performance
+    upstream_metrics: []
+
+    sql: |
+      SELECT
+        channel,
+        SUM(attributed_revenue) / NULLIF(SUM(ad_spend), 0) AS value
+      FROM dws.channel_performance
+      WHERE event_date BETWEEN :start_date AND :end_date
+      GROUP BY channel
+
+    params:
+      - start_date
+      - end_date
+
+    changelog:
+      - version: v1.0
+        date: "2026-04-28"
+        change: "Initial version"
+        breaking: false
+
+  # ===========================================
+  ad_spend_by_day:
+    version: v1.0
+    status: deprecated
+    owner: marketing-team
+    created_at: "2026-04-28"
+    updated_at: "2026-04-28"
+
+    name: "Ad Spend by Day"
+    description: "Total ad spend by day, across all channels."
+    business_definition: |
+      Sum of ad_spend from all attribution events.
+    unit: USD
+
+    source_tables:
+      - dws.channel_performance
+    upstream_metrics: []
+
+    sql: |
+      SELECT
+        event_date AS date,
+        channel,
+        SUM(ad_spend) AS value
+      FROM dws.channel_performance
+      WHERE event_date BETWEEN :start_date AND :end_date
+      GROUP BY event_date, channel
+      ORDER BY event_date
+
+    params:
+      - start_date
+      - end_date
+
+    changelog:
+      - version: v1.0
+        date: "2026-04-28"
+        change: "Initial version"
+        breaking: false
+
+  # ===========================================
+  # Slice 1: Sales × Marketing Cross-cut (PBI Migration)
+  # Migrated from legacy Panoply `Style_selling_df`
+  # See: docs/existing_data_inventory.md §5.1
+  # ===========================================
+  quantity_by_style_channel_week:
+    version: v1.2
+    status: active
+    owner: sia
+    created_at: "2026-05-19"
+    updated_at: "2026-05-27"
+
+    name: "Quantity by Style × Channel × Week"
+    description: "Weekly net units sold sliced by product style and marketing channel, replacing PBI Style_selling_df page."
+    business_definition: |
+      Net units sold = SUM(quantity - refunded_quantity).
+      Refunds are netted at the order_line grain across ALL restock types
+      (return / no_restock / cancel / legacy_restock) — a cancelled unit
+      never produced a real sale and is deducted accordingly.
+      Order-level exclusions: rows are filtered to is_sales_attributable = TRUE,
+      which excludes EXC orders (Shopify name LIKE '%EXC%') and replacement
+      orders (Shopify order metafield `replace_refund` = '["Replace"]').
+      Channel source: Triple Whale `channel_source` (available from 2025-07).
+      `channel_group` is the dimension roll-up hierarchy (Paid Search /
+      Paid Social / Email / ...).
+      Date grain: ISO 8601 year-week (Mon-Sun).
+      Currency: N/A (count). Reconciliation against Panoply Style_selling_df
+      week 28-2025: overall 1.69% (within < 2% trust gate),
+      residual fully itemized.
+    unit: count
+    source_system: "Triple Whale (channel attribution) + Shopify via Fivetran/dpsync (orders, line items, refunds, order metafield) + ERS product master (style attributes)"
+    grain: "order_line (one row per order line item); rolled up to style x channel x ISO week for display"
+    time_coverage:
+      history_starts: "2025-07-01"
+      channel_reliable_from: "2025-07-01"
+      replacement_exclusion_reliable_from: "2026-05-01"
+      notes: "Channel attribution available from Jul 2025 (TW adoption; cross-source order match 99.9%+ from Jul 2025). Replacement-order exclusion reliable from May 2026 (Shopify order metafield coverage start); earlier periods include replacement orders, immaterial (<0.1%)."
+    inclusions: "Paid orders flowing through Shopify, net of line-level refunds."
+    exclusions:
+      - "EXC orders (Shopify order name LIKE '%EXC%')"
+      - "Replacement orders (Shopify order metafield replace_refund = 'Replace'); reliable from May 2026"
+      - "Refunded units (netted at order_line grain: quantity - refunded_quantity)"
+    attribution:
+      source: "Triple Whale"
+      model: "Per-order attribution model as recorded by Triple Whale (linear / lastPlatformClick / fullFirstClick); channel_source_norm normalized to functional channel_group"
+      window: "Triple Whale default attribution window"
+    reconciliation: "vs Panoply Style_selling_df (final comparison, week 28-2025): -1.51%, within the <2% trust gate, residual fully itemized. Panoply retired June 2026; this is the last validated baseline."
+    source_tables:
+      - analytics_catalog.analytics_platform.fact_orders_line
+      - analytics_catalog.analytics_platform.dim_date
+      - analytics_catalog.analytics_platform.dim_channel
+      - analytics_catalog.analytics_platform.dim_product
+    upstream_metrics: []
+
+    grain:
+      - iso_year
+      - iso_week
+      - vend_id
+      - channel_source
+    dimensions:
+      time:
+        - iso_year
+        - iso_week
+        - date_key
+      product:
+        - vend_id
+        - item_description
+        - season
+      channel:
+        - channel_source
+        - channel_group
+    filters:
+      required:
+        - start_date
+        - end_date
+      optional:
+        - channels
+        - seasons
+        - styles
+    lineage_upstream:
+      facts:
+        - dwd.fact_orders_line
+      dims:
+        - dim_date
+        - dim_product
+        - dim_channel
+      raw_sources:
+        - shopify_raw.order
+        - shopify_raw.order_line
+        - shopify_raw.order_line_refund
+        - shopify_raw.order_metafield
+        - federated_catalog.triple_whale.attribution_order_click
+        - analytics_platform.raw_uploads/ers_monthly
+
+    sql: |
+      SELECT
+        d.iso_year,
+        d.iso_week,
+        p.vend_id,
+        p.item_description,
+        p.season,
+        c.channel_source,
+        c.channel_group,
+        SUM(f.quantity - f.refunded_quantity) AS value
+      FROM analytics_catalog.analytics_platform.fact_orders_line f
+      JOIN analytics_catalog.analytics_platform.dim_date d
+        ON f.date_key = d.date_key
+      JOIN analytics_catalog.analytics_platform.dim_product p
+        ON f.product_key = p.product_key
+      JOIN analytics_catalog.analytics_platform.dim_channel c
+        ON f.channel_key = c.channel_key
+      WHERE d.date_key BETWEEN :start_date AND :end_date
+        AND f.is_sales_attributable = TRUE
+        AND p.vend_id IS NOT NULL
+        AND (:channels IS NULL OR c.channel_source IN (:channels))
+        AND (:seasons IS NULL OR p.season IN (:seasons))
+        AND (:styles IS NULL OR p.vend_id IN (:styles))
+      GROUP BY d.iso_year, d.iso_week, p.vend_id, p.item_description, p.season,
+               c.channel_source, c.channel_group
+      ORDER BY d.iso_year, d.iso_week, c.channel_source
+
+    params:
+      - start_date
+      - end_date
+      - channels
+      - seasons
+      - styles
+
+    changelog:
+      - version: v1.0
+        date: "2026-05-19"
+        change: "Initial version. Migrated from PBI Style_selling_df page."
+        breaking: false
+      - version: v1.1
+        date: "2026-05-21"
+        change: "Renamed legacy_channel_group -> channel_group to match dim_channel v2.0 (Decision 21). Corrected raw source attribution_order -> attribution_order_click."
+        breaking: false
+      - version: v1.2
+        date: "2026-05-27"
+        change: "Net units model (Decision 22 v3): SUM(quantity - refunded_quantity), is_sales_attributable = TRUE filter (EXC + replacement order-level exclusion). Cancel netted at line grain via restock_type-agnostic refunded_quantity. is_refunded flag retired."
+        breaking: true
+
+  # ===========================================
+  # Slice 1b: SKU-grain units + dollars (stakeholder CSV export)
+  # ===========================================
+  units_dollars_by_sku_channel_week:
+    version: v1.0
+    status: active
+    owner: sia
+    created_at: "2026-06-15"
+    updated_at: "2026-06-15"
+
+    name: "Units & Dollars by SKU × Channel × Week"
+    description: "Weekly net units and dollar sales at SKU (variant) grain by channel. SKU-level companion to quantity_by_style_channel_week, adds a dollar measure. Backs the stakeholder CSV export."
+    business_definition: |
+      Same order-line model and exclusions as quantity_by_style_channel_week,
+      grained to SKU (dim_product.sku) instead of style (vend_id), plus a dollar measure.
+        units_sold   = SUM(quantity - refunded_quantity)
+        dollar_sales = SUM((quantity - refunded_quantity) * pre_tax_price)
+      pre_tax_price is the order_line UNIT price BEFORE tax/discounts, so dollar_sales
+      is a pre-discount approximation (units x list unit price), NOT realized revenue.
+      week_ending_date = the Sunday ending each ISO week.
+      Rows filtered to is_sales_attributable = TRUE; refunds netted at line grain.
+    unit: "mixed (count + USD)"
+    source_system: "Triple Whale (channel) + Shopify via dpsync (orders, lines, refunds, prices) + ERS (SKU)"
+    grain: "order_line; rolled up to SKU x channel x ISO week"
+    time_coverage:
+      history_starts: "2025-07-01"
+      channel_reliable_from: "2025-07-01"
+      replacement_exclusion_reliable_from: "2025-07-01"
+      notes: "Same coverage as quantity_by_style_channel_week; replacement metafield has an upstream sync gap ~Jan-Apr 2026."
+    inclusions: "Paid orders flowing through Shopify, net of line-level refunds."
+    exclusions:
+      - "EXC orders (order name LIKE '%EXC%')"
+      - "Replacement orders (order_metafield replace_refund = 'Replace')"
+      - "Refunded units (netted at order_line grain)"
+    attribution:
+      source: "Triple Whale"
+      model: "Per-order attribution as recorded by Triple Whale"
+      window: "Triple Whale default attribution window"
+    reconciliation: "Shares the fact validated against Panoply Style_selling_df (-1.51%, week 28-2025). Dollar measure not separately reconciled."
+    source_tables:
+      - analytics_catalog.analytics_platform.fact_orders_line
+      - analytics_catalog.analytics_platform.dim_date
+      - analytics_catalog.analytics_platform.dim_channel
+      - analytics_catalog.analytics_platform.dim_product
+    upstream_metrics: []
+
+    grain:
+      - iso_year
+      - iso_week
+      - sku
+      - channel_source
+    filters:
+      required:
+        - start_date
+        - end_date
+      optional:
+        - channels
+        - seasons
+        - styles
+    lineage_upstream:
+      facts:
+        - dwd.fact_orders_line
+      dims:
+        - dim_date
+        - dim_product
+        - dim_channel
+      raw_sources:
+        - shopify_raw.order
+        - shopify_raw.order_line
+        - shopify_raw.order_line_refund
+        - shopify_raw.order_metafield
+        - federated_catalog.triple_whale.attribution_order_click
+        - analytics_platform.raw_uploads/ers_monthly
+
+    sql: |
+      SELECT
+        date_add(to_date(d.date_actual), 7 - CAST(d.iso_day_of_week AS INT)) AS week_ending_date,
+        p.sku,
+        c.channel_source AS channel,
+        SUM(f.quantity - f.refunded_quantity)                              AS units_sold,
+        ROUND(SUM((f.quantity - f.refunded_quantity) * f.pre_tax_price), 2) AS dollar_sales
+      FROM analytics_catalog.analytics_platform.fact_orders_line f
+      JOIN analytics_catalog.analytics_platform.dim_date d
+        ON f.date_key = d.date_key
+      JOIN analytics_catalog.analytics_platform.dim_product p
+        ON f.product_key = p.product_key
+      JOIN analytics_catalog.analytics_platform.dim_channel c
+        ON f.channel_key = c.channel_key
+      WHERE d.date_key BETWEEN :start_date AND :end_date
+        AND f.is_sales_attributable = TRUE
+        AND p.sku IS NOT NULL
+        AND (:channels IS NULL OR c.channel_source IN (:channels))
+        AND (:seasons IS NULL OR p.season IN (:seasons))
+        AND (:styles IS NULL OR p.vend_id IN (:styles))
+      GROUP BY
+        date_add(to_date(d.date_actual), 7 - CAST(d.iso_day_of_week AS INT)),
+        p.sku, c.channel_source
+      HAVING SUM(f.quantity - f.refunded_quantity) <> 0
+      ORDER BY week_ending_date, channel, p.sku
+
+    params:
+      - start_date
+      - end_date
+      - channels
+      - seasons
+      - styles
+
+    changelog:
+      - version: v1.0
+        date: "2026-06-15"
+        change: "Initial. SKU-grain units + dollar_sales; backs the stakeholder CSV export."
+        breaking: false
+
+  amazon_fba_receiving_by_sku:
+    version: v1.0
+    status: active
+    owner: sia
+    created_at: "2026-05-28"
+    updated_at: "2026-05-28"
+
+    name: "Amazon FBA Receiving by SKU"
+    description: "Current FBA inbound shipment receiving status by SKU, replacing the legacy Panoply amazon_ship PBI feed."
+    business_definition: |
+      One row per (shipment, SKU). Sourced from Amazon SP-API shipmentItems
+      JOIN shipments on ShipmentId (replicates legacy Panoply amazon_ship).
+      created_date parsed from shipment_name (5 legacy formats).
+      receiving_gap = quantity_shipped - quantity_received.
+      Snapshot metric — no date range (planning team views current state).
+    unit: count
+    source_system: "Amazon Selling Partner API (SP-API) - FBA Inbound Shipments + Shipment Items"
+    grain: "shipment x SKU (one row per shipment_id x seller_sku)"
+    time_coverage:
+      notes: "FBA inbound shipments within the SP-API window; weekly snapshot scheduled Mon 06:00 ET."
+    inclusions: "All FBA inbound shipments returned by SP-API, across statuses."
+    exclusions: "None at the metric level; filter by shipment_status / destination_fc_id in the UI."
+    attribution: "N/A (operational receiving metric, no marketing attribution)."
+    reconciliation: "N/A (no legacy baseline; sourced directly from SP-API)."
+
+    source_tables:
+      - analytics_catalog.analytics_platform.amazon_gold_receiving_by_sku
+    upstream_metrics: []
+
+    lineage_upstream:
+      facts:
+        - amazon_gold_receiving_by_sku
+      raw_sources:
+        - "Amazon SP-API /fba/inbound/v0/shipmentItems"
+        - "Amazon SP-API /fba/inbound/v0/shipments"
+
+    sql: |
+      SELECT
+        shipment_id,
+        shipment_name,
+        shipment_status,
+        destination_fc_id,
+        created_date,
+        seller_sku,
+        fulfillment_network_sku,
+        quantity_shipped,
+        quantity_received,
+        quantity_in_case,
+        receiving_gap
+      FROM analytics_catalog.analytics_platform.amazon_gold_receiving_by_sku
+      WHERE (:statuses IS NULL OR shipment_status IN (:statuses))
+        AND (:fcs IS NULL OR destination_fc_id IN (:fcs))
+      ORDER BY created_date DESC NULLS LAST, shipment_id, seller_sku
+
+    params:
+      - statuses
+      - fcs
+
+    changelog:
+      - version: v1.0
+        date: "2026-05-28"
+        change: "Initial version. Migrated from PBI amazon_ship (Panoply)."
+        breaking: false
+
+  cohort_new_vs_returning_by_month:
+    version: v1.0
+    status: active
+    owner: sia
+    name: "New vs Returning Customers by Month"
+    description: "Monthly split of orders / units between first-time and returning customers."
+    business_definition: |
+      A customer's first order is derived with ROW_NUMBER() partitioned by customer,
+      ordered by order date. order_index = 1 -> First-time; order_index > 1 -> Returning.
+    source_system: "Shopify via Fivetran/dpsync (orders, customers)"
+    grain: "customer x order; presented by calendar month"
+    unit: count
+    exclusions:
+      - "Same order-level exclusions as the sales model (EXC, replacement, refund netting)"
+    attribution: "N/A"
+    reconciliation: "N/A (not part of the Panoply migration scope)."
+
+  cohort_retention_matrix:
+    version: v1.0
+    status: active
+    owner: sia
+    name: "Cohort Retention Matrix"
+    description: "Repeat-purchase retention by first-purchase-month cohort across subsequent months."
+    business_definition: |
+      Customers are grouped by first-purchase month (cohort). Each cell is the share of the
+      cohort that placed an order in month N after acquisition.
+    source_system: "Shopify via Fivetran/dpsync (orders, customers)"
+    grain: "cohort (first-purchase month) x months since acquisition"
+    unit: percent
+    attribution: "N/A"
+    reconciliation: "N/A"
+
+filters:
+  channel_source:
+    label: "Channel"
+    definition: "Marketing channel the order is attributed to."
+    source_system: "Triple Whale"
+    applies_to: ["quantity_by_style_channel_week", "units_dollars_by_sku_channel_week"]
+    notes: "Normalized to functional channel_group (Paid Search / Paid Social / Email / ...). Available from Jul 2025."
+  season:
+    label: "Season"
+    definition: "ERS product season tag."
+    source_system: "ERS product master"
+    applies_to: ["quantity_by_style_channel_week", "units_dollars_by_sku_channel_week"]
+  style:
+    label: "Style #"
+    definition: "ERS vend_id (style identifier)."
+    source_system: "ERS product master"
+    applies_to: ["quantity_by_style_channel_week", "units_dollars_by_sku_channel_week"]
+  shipment_status:
+    label: "Shipment Status"
+    definition: "Amazon FBA inbound shipment status (WORKING / SHIPPED / RECEIVING / CLOSED ...)."
+    source_system: "Amazon SP-API"
+    applies_to: ["amazon_fba_receiving_by_sku"]
+  destination_fc:
+    label: "Destination FC"
+    definition: "Destination Amazon fulfillment center for the shipment."
+    source_system: "Amazon SP-API"
+    applies_to: ["amazon_fba_receiving_by_sku"]
+  date_range:
+    label: "Date range"
+    definition: "Inclusive start/end date filter on the reporting window."
+    source_system: "derived (dim_date)"
+    applies_to: ["all"]

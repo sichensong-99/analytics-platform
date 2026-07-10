@@ -1,0 +1,32 @@
+# docker-compose.yml — local test of both containers wired together.
+# Place at repo root. Run: docker compose up --build
+#
+# Fill the Databricks values below from your local .env (the same values you
+# already use to run the metrics-service locally). For local testing you can
+# keep DATABRICKS_AUTH_TYPE=pat with a token IF you still have one that works;
+# otherwise test the frontend<->backend wiring with the /health endpoint and
+# wire real Databricks auth in Step 6.5 (service principal) once IT provisions it.
+
+services:
+  backend:
+    build: ./metrics-service
+    ports:
+      - "8000:8000"
+    environment:
+      DATABRICKS_SERVER_HOSTNAME: "${DATABRICKS_SERVER_HOSTNAME}"
+      DATABRICKS_HTTP_PATH: "${DATABRICKS_HTTP_PATH}"
+      DATABRICKS_AUTH_TYPE: "${DATABRICKS_AUTH_TYPE:-oauth}"
+      DATABRICKS_TOKEN: "${DATABRICKS_TOKEN:-}"
+      JWT_SECRET: "${JWT_SECRET:-local-dev-secret-change-me}"
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:3000"
+    environment:
+      # Inside the compose network the backend is reachable by service name.
+      METRICS_SERVICE_URL: "http://backend:8000"
+      NEXT_PUBLIC_BASE_URL: "http://localhost:3000"
+      JWT_SECRET: "${JWT_SECRET:-local-dev-secret-change-me}"
+    depends_on:
+      - backend

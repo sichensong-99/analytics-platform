@@ -1,0 +1,41 @@
+[project]
+name = "metrics-service"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "databricks-sdk>=0.114.0",
+    "databricks-sql-connector>=4.2.6",
+    "fastapi>=0.136.1",
+    "python-dotenv>=1.2.2",
+    "python-jose[cryptography]>=3.5.0",
+    "python-multipart>=0.0.27",
+    "pyyaml>=6.0.3",
+    "redis>=8.0.0",
+    "uvicorn>=0.46.0",
+]
+
+[tool.uv.workspace]
+members = [
+    "metrics-service",
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=9.0.3",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.15.17",
+]
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]
+ignore = ["E501"]

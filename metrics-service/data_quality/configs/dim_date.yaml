@@ -1,0 +1,57 @@
+# Data quality checks for dim_date (Slice 1)
+# Source: scripts/generate_dim_date.py output (2023-01-01 → 2030-12-31)
+
+description: "Data quality checks for dim_date — conformed time dimension"
+owner: "sia"
+version: "1.0"
+table_fqn: "analytics_catalog.analytics_platform.dim_date"
+
+checks:
+  # ===== Completeness =====
+  - type: not_null
+    table: dim_date
+    column: date_key
+
+  - type: not_null
+    table: dim_date
+    column: iso_year
+
+  - type: not_null
+    table: dim_date
+    column: iso_week
+
+  - type: not_null
+    table: dim_date
+    column: iso_day_of_week
+
+  # ===== Uniqueness =====
+  - type: unique
+    table: dim_date
+    column: date_key
+
+  # ===== Domain ranges (ISO 8601 spec) =====
+  - type: range
+    table: dim_date
+    column: iso_week
+    min: 1
+    max: 53
+
+  - type: range
+    table: dim_date
+    column: iso_day_of_week
+    min: 1
+    max: 7
+
+  - type: range
+    table: dim_date
+    column: iso_year
+    min: 2023
+    max: 2030
+
+  # ===== Freshness =====
+  # dim_date is a static seed; once loaded, the latest row should be >= today.
+  # We check that the table contains tomorrow's date — ensures forward coverage.
+  - type: freshness
+    table: dim_date
+    column: date_key
+    max_age_hours: -24  # negative = must extend into the future

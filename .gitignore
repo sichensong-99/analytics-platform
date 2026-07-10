@@ -1,0 +1,37 @@
+# === Secrets / credentials ===
+.env
+.env.*
+*.pem
+*.key
+.databrickscfg
+
+# === Terraform (state & vars contain secrets) ===
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+
+# === Python ===
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# === Node / Next.js ===
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+
+# === OS / editor ===
+.DS_Store
+Thumbs.db
+
+# === Local data exports & generated datasets (not part of the codebase) ===
+streaming_landing/
+docs/reconciliation/data/
+docs/reconciliation/reports/
+scripts/dim_date_seed.csv
+scripts/dim_date_seed.parquet

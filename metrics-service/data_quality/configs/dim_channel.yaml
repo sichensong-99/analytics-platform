@@ -1,0 +1,38 @@
+# Data quality checks for dim_channel (Slice 1)
+# Source: docs/data_modeling/dim_channel_seed.sql (16 rows)
+
+description: "Data quality checks for dim_channel — TW channel taxonomy with channel group"
+owner: "sia"
+version: "1.1"
+table_fqn: "analytics_catalog.analytics_platform.dim_channel"
+
+checks:
+  # ===== Completeness =====
+  - type: not_null
+    table: dim_channel
+    column: channel_key
+
+  - type: not_null
+    table: dim_channel
+    column: channel_source
+
+  - type: not_null
+    table: dim_channel
+    column: channel_group
+
+  # ===== Uniqueness =====
+  - type: unique
+    table: dim_channel
+    column: channel_key
+
+  - type: unique
+    table: dim_channel
+    column: channel_source
+
+  # ===== Freshness =====
+  # Seed table — rarely updated. Alert if no update in 90 days
+  # (sanity check that someone hasn't accidentally dropped it).
+  - type: freshness
+    table: dim_channel
+    column: _seeded_at
+    max_age_hours: 2160  # 90 days

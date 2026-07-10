@@ -1,0 +1,59 @@
+# Data quality checks for fact_orders_line (Slice 1)
+# Source: Shopify order_line × order × TW attribution_order × dim_product (via sku) × dim_channel
+# Notebook: 04_build_fact_orders_line.py
+# Grain: one row per Shopify order line. Natural key = shopify_line_id.
+
+description: "Data quality checks for fact_orders_line — row-grain sales fact joined with TW attribution"
+owner: "sia"
+version: "1.1"
+table_fqn: "analytics_catalog.analytics_platform.fact_orders_line"
+
+checks:
+  # ===== Completeness =====
+  - type: not_null
+    table: fact_orders_line
+    column: shopify_line_id
+
+  - type: not_null
+    table: fact_orders_line
+    column: date_key
+
+  - type: not_null
+    table: fact_orders_line
+    column: product_key
+
+  - type: not_null
+    table: fact_orders_line
+    column: channel_key
+
+  - type: not_null
+    table: fact_orders_line
+    column: quantity
+
+  # ===== Uniqueness =====
+  # Grain guarantee: one row per Shopify order line.
+  - type: unique
+    table: fact_orders_line
+    column: shopify_line_id
+
+  # ===== Domain ranges =====
+  # Quantity sanity: 1 to 100 per line. > 100 likely a B2B bulk that needs review.
+  - type: range
+    table: fact_orders_line
+    column: quantity
+    min: 1
+    max: 100
+
+  # Revenue sanity per line (pre_tax_price)
+  - type: range
+    table: fact_orders_line
+    column: pre_tax_price
+    min: 0
+    max: 10000
+
+  # ===== Freshness =====
+  # Daily refresh — should be < 36 hours behind real time
+  - type: freshness
+    table: fact_orders_line
+    column: _ingested_at
+    max_age_hours: 36
