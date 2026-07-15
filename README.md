@@ -22,13 +22,11 @@ make the new numbers match the old ones. I think that criterion is wrong. It
 assumes the legacy report was right, and it turns reconciliation into a search
 for agreement rather than a test.
 
-So for the customer classification rebuild (first-time vs returning buyer,
-13,163,530 rows) I wrote down a falsifiable prediction **before** querying:
-the legacy pipeline's order history is shallow, so it cannot see a customer's
-earlier purchases and should therefore **over-count first-time buyers**.
+So for the customer classification rebuild (First-time / Returning / Re-engaged — 13,163,530 rows) I wrote down a falsifiable prediction **before** querying:
+the legacy pipeline's order history is shallow, so it cannot see a customer's earlier purchases and should therefore **over-count first-time buyers**.
 
-The data said the opposite. First-time came in **72 rows low**, not high. My
-hypothesis was wrong, in direction, and I did not rewrite it after the fact.
+The data said the opposite. The legacy report's First-time count came in
+**72 rows low**, not high. My hypothesis was wrong, in direction, and I did not rewrite it after the fact.
 Chasing that inversion is what surfaced the real mechanism — and the rebuild
 only became trustworthy once the explanation survived a test designed to break
 it, rather than one designed to confirm it.
@@ -37,7 +35,7 @@ it, rather than one designed to confirm it.
 |---|---|
 | Order sets, day by day | identical (7,965 / 9,014 / 10,853) |
 | `Returning` totals | 14,544 = 14,544 |
-| `First-time + Returning` | 13,288 = 13,288 |
+| `First-time + Re-engaged` | 13,288 = 13,288 |
 | Residual | **116 rows, 100% itemized** — 18 history depth · 90 email-null first-time · 8 email-null returning |
 | Fan-out on 13.16M rows | zero |
 | Orders the legacy report silently dropped | **0.35% more recovered — 92% of them first-time buyers** |
@@ -59,7 +57,7 @@ Next.js portal (dashboards · metrics catalog · lineage UI)
         ↓ HTTP + JWT
 FastAPI metrics service (Redis cache-aside · YAML metric layer · query binding)
         ↓ SQL
-Databricks Lakehouse (Kimball star schema · Delta Lake · DST-aware)
+Databricks Lakehouse (Bronze/Silver/Gold · Kimball star schema · Delta Lake · Unity Catalog)
         ↑ batch ETL + Auto Loader / Structured Streaming
 Shopify · Triple Whale · Amazon SP-API · GA4 · ERS master · freight CSVs
         ↑ orchestrate
@@ -98,7 +96,7 @@ instrumented. Full caveats: [`docs/benchmarks/redis_cache_benchmark.md`](docs/be
 | Frontend | Next.js 16 · TypeScript · Tailwind · ECharts |
 | API | FastAPI · Pydantic · python-jose JWT |
 | Metric definitions | YAML DSL (PyYAML) |
-| Data warehouse | Databricks Lakehouse · Delta Lake · Kimball star schema |
+| Data warehouse | Databricks Lakehouse · Delta Lake · Unity Catalog · Medallion (Bronze/Silver/Gold) · Kimball star schema |
 | ETL | PySpark on Databricks |
 | Streaming | Auto Loader · Structured Streaming · watermark · exactly-once |
 | Orchestration | Databricks Workflows (Airflow DAG equivalent included for comparison) |
