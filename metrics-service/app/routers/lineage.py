@@ -22,8 +22,8 @@ CATALOG = "analytics_catalog"
 SCHEMA = "analytics_platform"
 EDGES_TABLE = f"{CATALOG}.{SCHEMA}.lineage_edges"
 
-HOST = os.environ["DATABRICKS_HOST"]
-HTTP_PATH = os.environ["DATABRICKS_HTTP_PATH"]
+HOST = os.environ.get("DATABRICKS_HOST", "example.cloud.databricks.com")
+HTTP_PATH = os.environ.get("DATABRICKS_HTTP_PATH", "/sql/1.0/warehouses/placeholder")
 DATA_SOURCE = os.environ.get("METRICS_DATA_SOURCE", "databricks")
 
 CATEGORIES = ["Source", "Raw / Silver", "Warehouse", "Metric", "Dashboard"]
