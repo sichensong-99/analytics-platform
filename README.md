@@ -52,18 +52,42 @@ Methodology, SQL and tooling: [`docs/reconciliation/`](docs/reconciliation/)
 
 ## Architecture
 
-```
-Next.js portal (dashboards · metrics catalog · lineage UI)
-        ↓ HTTP + JWT
-FastAPI metrics service (Redis cache-aside · YAML metric layer · query binding)
-        ↓ SQL
-Databricks Lakehouse (Bronze/Silver/Gold · Kimball star schema · Delta Lake · Unity Catalog)
-        ↑ batch ETL + Auto Loader / Structured Streaming
-Shopify · Triple Whale · Amazon SP-API · GA4 · ERS master · freight CSVs
-        ↑ orchestrate
-Databricks Workflows (DAG · multi-tier DQ gates · alerts)
-        ↑ provision
-Azure Container Apps · ACR · Key Vault · Terraform
+```mermaid
+flowchart LR
+    subgraph SRC["Data Sources"]
+        SH["Shopify"]
+        TW["Triple Whale"]
+        AMZ["Amazon SP-API"]
+        ERP["ERP · Postgres federation"]
+    end
+    subgraph LAKE["Lakehouse · Medallion (Delta Lake)"]
+        direction TB
+        BRONZE["Bronze — raw JSON, schema-on-read"]
+        SILVER["Silver — typed + DQ gate"]
+        GOLD["Gold · Kimball star schema<br/>dim_date · dim_channel · dim_product (SCD2)<br/>fact_orders_line — incremental MERGE + watermark"]
+        BRONZE --> SILVER --> GOLD
+    end
+    subgraph SERVE["Serving Layer"]
+        direction TB
+        API["FastAPI Metrics Service<br/>YAML DSL · versioned · JWT"]
+        REDIS["Redis cache-aside"]
+        API <--> REDIS
+    end
+    PORTAL["Next.js + ECharts Portal<br/>dashboards · metrics catalog · lineage · CSV export"]
+    SRC -->|managed sync · custom REST| LAKE
+    GOLD --> API --> PORTAL
+    subgraph STREAM["Structured Streaming"]
+        AL["Auto Loader"] --> SS["stream-stream join<br/>watermark · exactly-once"] --> ANOM["real-time anomaly dashboard"]
+    end
+    SRC -.-> STREAM
+    ORCH["Databricks Workflows<br/>DAG · DQ-as-Gate · retry / alert"] -. orchestrates .-> LAKE
+    UC["Unity Catalog<br/>automated lineage"] -. governs .-> LAKE
+    subgraph DEPLOY["Deployment"]
+        ACA["Azure Container Apps<br/>Terraform · managed identity · Key Vault"]
+        CICD["CI/CD · GitHub Actions"]
+    end
+    DEPLOY -. hosts .-> SERVE
+    DEPLOY -. hosts .-> PORTAL
 ```
 
 ---
