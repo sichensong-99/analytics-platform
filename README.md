@@ -239,7 +239,6 @@ connection (no PAT).
 - [`docs/orchestration_workflows_vs_airflow.md`](docs/orchestration_workflows_vs_airflow.md) — Workflows vs Airflow, and when I would switch
 - [`docs/data_modeling/star_schema_ddl.sql`](docs/data_modeling/star_schema_ddl.sql) — production-synced DDL (v2.0)
 - [`docs/data_contracts/`](docs/data_contracts/) — upstream data contracts
-- [`docs/legacy_panoply_etl.md`](docs/legacy_panoply_etl.md) — legacy pipeline reverse-engineering
 - [`docs/existing_data_inventory.md`](docs/existing_data_inventory.md) — report page → data source mapping
 - [`docs/RUNBOOK.md`](docs/RUNBOOK.md) — operational runbook
 - [`metrics-service/README.md`](metrics-service/README.md) — metrics service detail
