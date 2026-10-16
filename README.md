@@ -2,9 +2,10 @@
 
 # Internal Analytics Platform
 
-> End-to-end data platform replacing Power BI Service for a retailer's ecommerce
-> team — ingests multi-source data into a Lakehouse, serves governed metrics
-> through a versioned API, and surfaces them in a self-service web portal.
+> End-to-end data platform that replaced a retailer's commercial warehouse
+> (Panoply) and Power BI Service — ingests multi-source data into a Lakehouse,
+> serves governed metrics through a versioned API, and surfaces them in a
+> self-service web portal.
 > Owned end to end: data contracts, dimensional modeling, PySpark ETL, streaming,
 > metrics API, portal, orchestration, and production deployment on Azure.
 
@@ -102,6 +103,8 @@ flowchart LR
 | Sales fact reconciliation vs legacy | 1.69% total difference (within 2% trust gate), residual **100% itemized** |
 | Customer classification reconciliation | **zero residual** on 13.16M rows |
 | Scheduled pipelines, last 90 days | 881 runs · 99.43% success |
+| Legacy run-rate retired (Panoply warehouse + 16 Power BI seats) | ~$25K / year |
+| Panoply spend while still in use (ingestion-frequency tuning, unused tables dropped) | $2,499 → $1,799 / month (−28%) |
 
 ---
 
@@ -145,49 +148,36 @@ analytics-platform/
 
 ---
 
-## Key Engineering Practices
+## Engineering Practices and Decisions
+
+Each item below is backed by code or a document in this repository.
 
 - **Reconciliation as falsification** — a migration is tested by trying to break
   the hypothesis, not by matching the legacy number (see above)
-- **Vertical Slice delivery** — end-to-end per report page, not waterfall layer-by-layer
-- **Data Contracts before ingestion** — schema, quality, and SLA defined upstream
-- **Versioned Metrics governance** — every metric carries version, owner, changelog,
-  with explicit `breaking: true` annotation for semantic changes
-- **Every business metric is defined in `definitions.yaml`** — hand-written
-  endpoints were retired so this holds without exception
-- **Kimball dimensional modeling** — fact + conformed dims, ISO 8601 only, SCD2
-  where history is actually needed (SCD1 elsewhere, deliberately)
-- **Materialized business rules** — `is_sales_attributable` encodes the
-  sales-exclusion rule once at the data layer, replacing scattered WHERE filters
-- **Multi-tier DQ SLO** — PASS / WARN / FAIL calibrated to an empirical 0.15%
-  baseline, avoiding alert fatigue
-- **DQ-as-Gate** — FAIL threshold halts the pipeline before write
-- **DST-aware timezone** — `from_utc_timestamp('America/New_York')` corrects a
-  legacy `processed_at - 5h` summer drift
-- **Line-level refund netting** — `refunded_quantity` covers every `restock_type`
-- **Fault-tolerant ETL** — auto-detects upstream table availability, degrades
-  gracefully when a source is not yet synced
-- **Schema-evolution tolerance** — dual-format auto-detection, historical CSVs replayable
-- **Deployment gate** — an eight-step release checklist written after two
-  production incidents; explicit traffic weights and a shadow revision
-
----
-
-## Architectural Decisions
-
-Decisions are logged with trade-offs in an internal decision log. Ones that
-shaped the platform most:
-
-- **Vertical Slice methodology** — ship one report end-to-end before broadening
-- **ISO 8601 only** — drop US-week compatibility rather than carry two calendars
-- **DST-aware timezone** — corrects the legacy `processed_at - 5h` bug
-- **Multi-tier DQ SLO** — calibrated against an empirical baseline, not a guess
-- **`channel_group` as a Kimball roll-up hierarchy** — replaces "GA4 compat" framing
-- **Materialized `is_sales_attributable`** + line-level refund netting
-- **SCD1 first, SCD2 only when a real as-of requirement appeared** — deferring
-  complexity, then consciously upgrading, is itself the decision
+- **Vertical Slice delivery** — one report page end-to-end before broadening,
+  so join and grain mistakes surface in week one, not at the end
+- **Data Contracts before ingestion** — schema, quality and SLA agreed upstream
+  ([`docs/data_contracts/`](docs/data_contracts/))
+- **Versioned metric definitions** — every metric in `definitions.yaml` carries
+  version, owner, changelog and lineage, with an explicit `breaking: true` flag
+  for semantic changes
+- **Kimball star schema with one time semantics** — conformed dimensions,
+  ISO 8601 calendar only (no second US-week calendar), DST-aware
+  `America/New_York` conversion that corrects the legacy fixed `−5h` drift;
+  SCD1 first, SCD2 (`dim_product_scd2`) only once a real as-of requirement appeared
+- **Business rules materialized once** — `is_sales_attributable` encodes the
+  sales-exclusion rule at the data layer instead of scattered `WHERE` filters;
+  refunds netted at line level across every `restock_type`
+- **Incremental load** — `updated_at` watermark with lookback + Delta `MERGE`
+  upsert, so late refunds re-open old weeks correctly; a `FULL_REFRESH` switch
+  for backfill (full rebuild ~18 min, daily increment in seconds)
+- **Multi-tier DQ SLO as a gate** — PASS / WARN / FAIL thresholds calibrated to
+  an empirical 0.15% baseline; FAIL halts the pipeline before write
 - **Databricks Workflows over Airflow** — with the conditions under which I would
   switch written down: [`docs/orchestration_workflows_vs_airflow.md`](docs/orchestration_workflows_vs_airflow.md)
+- **Deployment gate** — an eight-step release checklist written after two
+  production incidents; explicit traffic weights and a shadow revision instead of
+  `latestRevision: true`
 
 ---
 
