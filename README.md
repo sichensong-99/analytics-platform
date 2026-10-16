@@ -2,8 +2,8 @@
 
 # Internal Analytics Platform
 
-> End-to-end data platform that replaced a retailer's commercial warehouse
-> (Panoply) and Power BI Service — ingests multi-source data into a Lakehouse,
+> End-to-end data platform that replaced a retailer's commercial cloud
+> warehouse and BI subscriptions — ingests multi-source data into a Lakehouse,
 > serves governed metrics through a versioned API, and surfaces them in a
 > self-service web portal.
 > Owned end to end: data contracts, dimensional modeling, PySpark ETL, streaming,
@@ -103,8 +103,8 @@ flowchart LR
 | Sales fact reconciliation vs legacy | 1.69% total difference (within 2% trust gate), residual **100% itemized** |
 | Customer classification reconciliation | **zero residual** on 13.16M rows |
 | Scheduled pipelines, last 90 days | 881 runs · 99.43% success |
-| Legacy run-rate retired (Panoply warehouse + 16 Power BI seats) | ~$25K / year |
-| Panoply spend while still in use (ingestion-frequency tuning, unused tables dropped) | $2,499 → $1,799 / month (−28%) |
+| Legacy run-rate retired (commercial warehouse + 16 BI report seats) | ~$25K / year |
+| Legacy warehouse spend while still in use (ingestion-frequency tuning, unused tables dropped) | $2,499 → $1,799 / month (−28%) |
 
 ---
 
