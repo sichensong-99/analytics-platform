@@ -9,9 +9,9 @@
 > metrics API, portal, orchestration, and production deployment on Azure.
 
 ![stack](https://img.shields.io/badge/stack-Databricks%20%7C%20FastAPI%20%7C%20Next.js%20%7C%20Azure-blue)
-![scale](https://img.shields.io/badge/scale-44M%20order%20lines-informational)
+![scale](https://img.shields.io/badge/scale-41%20tables%20%C2%B7%2090M%20rows-informational)
 ![reconciliation](https://img.shields.io/badge/customer%20classification-zero%20residual-brightgreen)
-![slice1](https://img.shields.io/badge/Slice%201%20reconciliation-%E2%88%921.51%25-brightgreen)
+![slice1](https://img.shields.io/badge/sales%20reconciliation-1.69%25%2C%20fully%20itemized-brightgreen)
 
 ---
 
@@ -68,10 +68,7 @@ flowchart LR
         BRONZE --> SILVER --> GOLD
     end
     subgraph SERVE["Serving Layer"]
-        direction TB
         API["FastAPI Metrics Service<br/>YAML DSL · versioned · JWT"]
-        REDIS["Redis cache-aside"]
-        API <--> REDIS
     end
     PORTAL["Next.js + ECharts Portal<br/>dashboards · metrics catalog · lineage · CSV export"]
     SRC -->|managed sync · custom REST| LAKE
@@ -96,20 +93,15 @@ flowchart LR
 
 | | |
 |---|---|
-| Shopify `order_line` (full table) | 44.67M |
-| TW `attribution_order_click` (full table) | 25.26M |
-| Order lines processed (Slice 1 ETL window) | 9.97M |
+| Warehouse scale (managed schema, as of 2026-09) | 41 Delta tables · 90M rows · 2.5 GB compressed |
+| Order-line fact table | 13.18M rows |
+| Attribution events scanned across sources | 25M+ |
 | Cross-source join match rate | 99.72% |
 | Channel DQ unmatched | 0.318% (PASS) |
 | Product DQ unmatched | 0.000% (PASS) |
-| Slice 1 reconciliation vs legacy | −1.51% (within 2% trust gate), residual **100% itemized** |
+| Sales fact reconciliation vs legacy | 1.69% total difference (within 2% trust gate), residual **100% itemized** |
 | Customer classification reconciliation | **zero residual** on 13.16M rows |
-| Metrics API, cold query (~10M-row fact) | 5,086 ms |
-| Metrics API, warm (Redis cache hit) | **16.6 ms** |
-
-The 16.6 ms figure is a per-repeated-request number within TTL, **not** an
-average production saving — that depends on hit rate, which is not yet
-instrumented. Full caveats: [`docs/benchmarks/redis_cache_benchmark.md`](docs/benchmarks/redis_cache_benchmark.md)
+| Scheduled pipelines, last 90 days | 881 runs · 99.43% success |
 
 ---
 
@@ -124,7 +116,6 @@ instrumented. Full caveats: [`docs/benchmarks/redis_cache_benchmark.md`](docs/be
 | ETL | PySpark on Databricks |
 | Streaming | Auto Loader · Structured Streaming · watermark · exactly-once |
 | Orchestration | Databricks Workflows (Airflow DAG equivalent included for comparison) |
-| Cache | Redis (cache-aside) |
 | Infrastructure | Azure Container Apps · ACR · Key Vault · Log Analytics · **Terraform** |
 | Package management | uv (Python) · npm (Node) |
 
@@ -136,7 +127,7 @@ instrumented. Full caveats: [`docs/benchmarks/redis_cache_benchmark.md`](docs/be
 analytics-platform/
 ├── frontend/                       # Next.js portal
 ├── metrics-service/                # FastAPI + YAML metric definitions
-│   ├── app/                        # API service (routers · cache · client)
+│   ├── app/                        # API service (routers · client)
 │   └── data_quality/               # YAML-driven DQ framework
 ├── databricks-notebooks/slice_1/   # PySpark ETL (notebook 01-07 · DQ gate · lineage)
 ├── streaming/                      # Auto Loader ingest · stream-stream join · gold anomaly
@@ -149,7 +140,6 @@ analytics-platform/
     ├── data_modeling/              # Star schema DDL
     ├── reconciliation/             # Reconciliation methodology, SQL, tooling
     ├── data_contracts/             # Upstream data contracts
-    ├── benchmarks/                 # Redis cache benchmark
     └── RUNBOOK.md                  # Operational runbook
 ```
 
@@ -211,7 +201,7 @@ shaped the platform most:
 | Customer classification (first-time / returning) | ✅ zero residual |
 | Databricks Workflows orchestration · DQ gates | ✅ running daily |
 | Streaming — Auto Loader · watermark · exactly-once | ✅ |
-| Redis cache · metrics catalog · lineage UI | ✅ |
+| Metrics catalog · lineage UI | ✅ |
 | Amazon FBA SP-API ingestion (self-built) | ✅ |
 | Azure deployment · Terraform · runbook | ✅ |
 
@@ -257,7 +247,6 @@ connection (no PAT).
 - [`docs/architecture/phase4_orchestration_design.md`](docs/architecture/phase4_orchestration_design.md) — orchestration design
 - [`docs/architecture/amazon_ingestion_design.md`](docs/architecture/amazon_ingestion_design.md) — Amazon SP-API ingestion design
 - [`docs/orchestration_workflows_vs_airflow.md`](docs/orchestration_workflows_vs_airflow.md) — Workflows vs Airflow, and when I would switch
-- [`docs/benchmarks/redis_cache_benchmark.md`](docs/benchmarks/redis_cache_benchmark.md) — cache benchmark + honest caveats
 - [`docs/data_modeling/star_schema_ddl.sql`](docs/data_modeling/star_schema_ddl.sql) — production-synced DDL (v2.0)
 - [`docs/data_contracts/`](docs/data_contracts/) — upstream data contracts
 - [`docs/legacy_panoply_etl.md`](docs/legacy_panoply_etl.md) — legacy pipeline reverse-engineering
